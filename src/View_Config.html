@@ -1,0 +1,12 @@
+<section id="view-config" class="hidden">
+  <div class="panel-box">
+    <div class="field"><label>Nome do Novo Time</label><input type="text" id="cfgTimeNome" placeholder="Ex: Finanças & Controle"></div>
+    <div class="field"><label>Sigla</label><input type="text" id="cfgTimeSigla" placeholder="FIN"></div>
+    <div class="field"><label>Cor Hex</label><input type="color" id="cfgTimeCor" value="#0284c7"></div>
+    <button class="btn-primario" onclick="criarTimeUI()">+ Cadastrar Time</button>
+  </div>
+  <div class="panel-box" style="display:block;">
+    <h3 style="margin-top:0;">🏢 Times Cadastrados na Base</h3>
+    <div id="listaTimesConfig"></div>
+  </div>
+</section>

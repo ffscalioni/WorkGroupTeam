@@ -1,0 +1,16 @@
+{
+  "name": "workspace-team-hub-v4",
+  "version": "4.0.0",
+  "description": "Hub Multi-Times de Gestao de Atividades, Objetivos, Rotinas e Dependencias no Google Workspace",
+  "scripts": {
+    "login": "clasp login",
+    "pull": "clasp pull",
+    "push": "clasp push -f",
+    "watch": "clasp push --watch",
+    "open": "clasp open"
+  },
+  "devDependencies": {
+    "@google/clasp": "^2.4.2",
+    "@types/google-apps-script": "^1.0.83"
+  }
+}

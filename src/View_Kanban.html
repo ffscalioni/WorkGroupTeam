@@ -1,0 +1,22 @@
+<section id="view-kanban">
+  <div class="panel-box" style="background:#eff6ff;">
+    <div class="field">
+      <label>🏷️ Filtrar por Time</label>
+      <select id="filtroTimeKanban" onchange="renderizarInterface()"></select>
+    </div>
+    <div class="field">
+      <label>🎯 Filtrar por Objetivo</label>
+      <select id="filtroObjetivoKanban" onchange="renderizarInterface()"></select>
+    </div>
+    <div class="field">
+      <label>🗓️ Agendamento / Dependências</label>
+      <select id="filtroAgendamentoKanban" onchange="renderizarInterface()">
+        <option value="TODAS">Todas as Atividades</option>
+        <option value="HOJE">⚡ Ativas Hoje</option>
+        <option value="FUTURAS">🗓️ Agendadas p/ Data Futura</option>
+        <option value="DEPENDENCIA">⛓️ Com Dependência</option>
+      </select>
+    </div>
+  </div>
+  <div class="kanban-grid" id="containerColunasKanban"></div>
+</section>

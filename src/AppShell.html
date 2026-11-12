@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Workspace Team Hub v4</title>
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <!-- BARRA DE TELEMETRIA DO CACHE DUPLO E ATALHOS -->
+  <div class="telemetry-bar">
+    <div>
+      <span>🟢 <strong>Cache Duplo Ativo:</strong> localStorage + CacheService Paginado</span>
+      <span id="lblVersaoCache" style="margin-left:12px;">Versão: carregando...</span>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;">
+      <span id="lblCotaEmail">📧 Cota MailApp: --</span>
+      <button class="btn-mini" onclick="forcarSincroniaServidor()">🔄 Sincronizar Sheets ➔ Cache</button>
+      <button class="btn-mini" onclick="abrirCommandPalette()">⌨️ Comandos (Ctrl+K)</button>
+    </div>
+  </div>
+
+  <!-- CABEÇALHO PRINCIPAL E NAVEGAÇÃO ENTRE VIEWS SEPARADAS -->
+  <header class="app-header">
+    <div>
+      <div class="brand-title">🚀 Workspace Hub Multi-Times</div>
+      <div class="brand-sub" id="lblUsuarioAtivo">Autenticando no Google Workspace...</div>
+    </div>
+    <div class="nav-tabs">
+      <button class="tab-btn active" id="tabBtn-kanban" onclick="navegarPara('kanban')">📋 Quadro & Dependências</button>
+      <button class="tab-btn" id="tabBtn-rotinas" onclick="navegarPara('rotinas')">🔄 Rotinas & Checklists</button>
+      <button class="tab-btn" id="tabBtn-hierarquia" onclick="navegarPara('hierarquia')">🎯 Objetivos & Projetos</button>
+      <button class="tab-btn" id="tabBtn-relatorios" onclick="navegarPara('relatorios')">📊 Relatórios Gerenciais</button>
+      <button class="tab-btn" id="tabBtn-config" onclick="navegarPara('config')">⚙️ Configuração Multi-Times</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn-foco" id="btnMeuDia" onclick="alternarModoMeuDia()">☀️ Meu Dia</button>
+      <button class="btn-primario" onclick="abrirModalNovaTarefa()">+ Nova Tarefa</button>
+    </div>
+  </header>
+
+  <!-- CONTAINER CENTRAL QUE CARREGA CADA VIEW DE UM ARQUIVO .HTML SEPARADO -->
+  <main class="main-container">
+    <?!= include('View_Kanban'); ?>
+    <?!= include('View_Rotinas'); ?>
+    <?!= include('View_Hierarquia'); ?>
+    <?!= include('View_Relatorios'); ?>
+    <?!= include('View_Config'); ?>
+  </main>
+
+  <!-- POPUPS / MODAIS EM ARQUIVOS .HTML SEPARADOS -->
+  <?!= include('Modal_Tarefa'); ?>
+  <?!= include('Modal_CommandPalette'); ?>
+
+  <!-- MOTOR JAVASCRIPT CENTRAL -->
+  <?!= include('ClientCore_JS'); ?>
+</body>
+</html>

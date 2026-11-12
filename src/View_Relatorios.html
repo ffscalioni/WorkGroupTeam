@@ -1,0 +1,27 @@
+<section id="view-relatorios" class="hidden">
+  <div class="panel-box" style="display:block;">
+    <h3 style="margin-top:0;color:var(--primary);">🔄 1. Relatório Gerencial de Rotinas (Feito vs. Pendente)</h3>
+    <table>
+      <thead>
+        <tr><th>Rotina</th><th>Frequência</th><th>Responsável</th><th>Checklist</th><th>Status no Ciclo</th><th>Última Descrição</th></tr>
+      </thead>
+      <tbody id="tbodyRelRotinas"></tbody>
+    </table>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;">
+    <div class="panel-box" style="display:block;">
+      <h3 style="margin-top:0;color:var(--primary);">🎯 2. Relatório por Objetivo</h3>
+      <table>
+        <thead><tr><th>Objetivo</th><th>Tarefas</th><th>Progresso</th></tr></thead>
+        <tbody id="tbodyRelObjetivos"></tbody>
+      </table>
+    </div>
+    <div class="panel-box" style="display:block;">
+      <h3 style="margin-top:0;color:var(--primary);">👤 3. Relatório por Indivíduo</h3>
+      <table>
+        <thead><tr><th>Membro</th><th>Pendentes</th><th>Rotinas</th><th>Entrega (%)</th></tr></thead>
+        <tbody id="tbodyRelIndividuos"></tbody>
+      </table>
+    </div>
+  </div>
+</section>

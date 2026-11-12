@@ -1,0 +1,15 @@
+<section id="view-hierarquia" class="hidden">
+  <div class="panel-box">
+    <div class="field"><label>Time</label><select id="novoObjTime"></select></div>
+    <div class="field" style="flex:2;"><label>Novo Objetivo Estratégico</label><input type="text" id="novoObjTitulo"></div>
+    <div class="field"><label>Meta / Indicador</label><input type="text" id="novoObjMeta"></div>
+    <button class="btn-primario" onclick="criarObjetivoUI()">+ Objetivo</button>
+  </div>
+  <div class="panel-box">
+    <div class="field" style="flex:2;"><label>Novo Projeto / Iniciativa</label><input type="text" id="novoPrjNome"></div>
+    <div class="field"><label>Objetivo Vinculado</label><select id="novoPrjObj"></select></div>
+    <div class="field"><label>Líder</label><select id="novoPrjLider"></select></div>
+    <button class="btn-primario" onclick="criarProjetoUI()">+ Projeto</button>
+  </div>
+  <div id="containerArvoreObjetivos"></div>
+</section>

@@ -1,0 +1,392 @@
+<script>
+  const STORAGE_KEY = 'WORKSPACE_HUB_V4_CACHE';
+  let STATE = {
+    versaoCache: '0',
+    usuarioEmail: '',
+    cotaEmail: 100,
+    modoMeuDia: false,
+    times: [],
+    membros: [],
+    objetivos: [],
+    projetos: [],
+    tarefas: [],
+    rotinas: [],
+    historicoRotinas: []
+  };
+
+  window.addEventListener('DOMContentLoaded', () => {
+    // 1. Carrega instantaneamente do cache do navegador (0ms) se existir
+    const cacheLocal = localStorage.getItem(STORAGE_KEY);
+    if (cacheLocal) {
+      try {
+        STATE = Object.assign(STATE, JSON.parse(cacheLocal));
+        popularSelects();
+        renderizarInterface();
+      } catch (e) {}
+    }
+
+    // 2. Busca a versão atualizada do CacheService do Google Apps Script
+    sincronizarComServidor();
+
+    // 3. Inicia Polling leve a cada 30 segundos sem refresh na página
+    setInterval(verificarAtualizacaoSilenciosa, 30000);
+
+    // 4. Atalho global Ctrl+K para abrir o Command Palette
+    window.addEventListener('keydown', (ev) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
+        ev.preventDefault();
+        abrirCommandPalette();
+      }
+    });
+  });
+
+  function salvarCacheNavegador(novoEstado) {
+    STATE = Object.assign(STATE, novoEstado);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE));
+    document.getElementById('lblVersaoCache').innerText = 'Versão RAM: ' + STATE.versaoCache;
+    document.getElementById('lblUsuarioAtivo').innerText = 'Conectado como: ' + STATE.usuarioEmail;
+    document.getElementById('lblCotaEmail').innerText = '📧 Cota MailApp: ' + STATE.cotaEmail;
+    popularSelects();
+    renderizarInterface();
+  }
+
+  function sincronizarComServidor() {
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run.withSuccessHandler(salvarCacheNavegador).apiObterEstadoCompleto();
+    }
+  }
+
+  function verificarAtualizacaoSilenciosa() {
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run.withSuccessHandler(res => {
+        if (res && String(res.versaoCache) !== String(STATE.versaoCache)) {
+          sincronizarComServidor();
+        }
+      }).apiVerificarVersaoCache();
+    }
+  }
+
+  function forcarSincroniaServidor() {
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run.withSuccessHandler(salvarCacheNavegador).apiForcarRecargaCache();
+    }
+  }
+
+  function navegarPara(aba) {
+    ['kanban', 'rotinas', 'hierarquia', 'relatorios', 'config'].forEach(id => {
+      document.getElementById('view-' + id).classList.toggle('hidden', id !== aba);
+      document.getElementById('tabBtn-' + id).classList.toggle('active', id === aba);
+    });
+  }
+
+  function alternarModoMeuDia() {
+    STATE.modoMeuDia = !STATE.modoMeuDia;
+    document.getElementById('btnMeuDia').classList.toggle('ativo', STATE.modoMeuDia);
+    renderizarInterface();
+  }
+
+  function popularSelects() {
+    const fTime = document.getElementById('filtroTimeKanban');
+    const fObj = document.getElementById('filtroObjetivoKanban');
+    if (!fTime || !fObj) return;
+
+    fTime.innerHTML = '<option value="TODOS">Todos os Times</option>' +
+      STATE.times.map(t => `<option value="${t.ID_Time}">${t.Nome_Time}</option>`).join('');
+    fObj.innerHTML = '<option value="TODOS">Todos os Objetivos</option>' +
+      STATE.objetivos.map(o => `<option value="${o.ID_Objetivo}">${o.Titulo_Objetivo}</option>`).join('');
+
+    const optsTime = STATE.times.map(t => `<option value="${t.ID_Time}">${t.Nome_Time}</option>`).join('');
+    const optsMembros = STATE.membros.map(m => `<option value="${m.Nome_Exibicao}">${m.Nome_Exibicao}</option>`).join('');
+    const optsProj = STATE.projetos.map(p => `<option value="${p.ID_Projeto}">${p.Nome_Projeto}</option>`).join('');
+    const optsObj = STATE.objetivos.map(o => `<option value="${o.ID_Objetivo}">${o.Titulo_Objetivo}</option>`).join('');
+
+    document.getElementById('rotTime').innerHTML = optsTime;
+    document.getElementById('rotResponsavel').innerHTML = optsMembros;
+    document.getElementById('novoObjTime').innerHTML = optsTime;
+    document.getElementById('novoPrjObj').innerHTML = optsObj;
+    document.getElementById('novoPrjLider').innerHTML = optsMembros;
+    document.getElementById('modProjetoTarefa').innerHTML = optsProj;
+    document.getElementById('modRespTarefa').innerHTML = optsMembros;
+    document.getElementById('modDepTarefa').innerHTML = '<option value="">Sem dependência</option>' +
+      STATE.tarefas.map(t => `<option value="${t.ID_Tarefa}">[${t.ID_Tarefa}] ${t.Titulo_Tarefa}</option>`).join('');
+  }
+
+  function renderizarInterface() {
+    renderizarKanban();
+    renderizarRotinas();
+    renderizarHierarquia();
+    renderizarRelatorios();
+    renderizarConfig();
+  }
+
+  function renderizarKanban() {
+    const cols = ['A Fazer', 'Em Andamento', 'Bloqueado', 'Concluído'];
+    const cont = document.getElementById('containerColunasKanban');
+    if (!cont) return;
+    cont.innerHTML = '';
+
+    const fTime = document.getElementById('filtroTimeKanban').value || 'TODOS';
+    const fObj = document.getElementById('filtroObjetivoKanban').value || 'TODOS';
+    const fAg = document.getElementById('filtroAgendamentoKanban').value || 'TODAS';
+    const hoje = new Date().toISOString().slice(0, 10);
+
+    cols.forEach(status => {
+      const tarefasCol = STATE.tarefas.filter(t => {
+        if (t.Status !== status) return false;
+        if (fTime !== 'TODOS' && t.ID_Time !== fTime) return false;
+        if (fObj !== 'TODOS' && t.ID_Objetivo !== fObj) return false;
+        if (fAg === 'HOJE' && t.Data_Inicio > hoje) return false;
+        if (fAg === 'FUTURAS' && (!t.Data_Inicio || t.Data_Inicio <= hoje)) return false;
+        if (fAg === 'DEPENDENCIA' && !t.ID_Tarefa_Predecessora) return false;
+        return true;
+      });
+
+      const divCol = document.createElement('div');
+      divCol.className = 'kanban-col';
+      divCol.innerHTML = `<div class="kanban-col-header"><span>${status}</span><span>${tarefasCol.length}</span></div>`;
+
+      tarefasCol.forEach(t => {
+        let htmlDep = '';
+        if (t.ID_Tarefa_Predecessora) {
+          const pred = STATE.tarefas.find(p => String(p.ID_Tarefa) === String(t.ID_Tarefa_Predecessora));
+          const liberada = pred && pred.Status === 'Concluído';
+          htmlDep = `<div class="${liberada ? 'dep-ok' : 'dep-alert'}">${liberada ? '🔓 Liberada por' : '🔒 Aguardando'} [${t.ID_Tarefa_Predecessora}]</div>`;
+        }
+
+        const card = document.createElement('div');
+        card.className = 'card-task';
+        card.innerHTML = `
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);">
+            <strong>${t.ID_Tarefa}</strong><span>📅 ${t.Data_Prazo || '-'}</span>
+          </div>
+          <div style="font-weight:700;font-size:13px;margin:5px 0;">${t.Titulo_Tarefa}</div>
+          ${htmlDep}
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">👤 ${t.Responsavel}</div>
+          <select style="width:100%;padding:5px;border-radius:5px;font-size:11px;" onchange="mudarStatusTarefaUI('${t.ID_Tarefa}', this.value)">
+            ${cols.map(c => `<option value="${c}" ${t.Status === c ? 'selected' : ''}>${c}</option>`).join('')}
+          </select>
+        `;
+        divCol.appendChild(card);
+      });
+      cont.appendChild(divCol);
+    });
+  }
+
+  function mudarStatusTarefaUI(idTarefa, novoStatus) {
+    const t = STATE.tarefas.find(x => x.ID_Tarefa === idTarefa);
+    if (t && novoStatus === 'Concluído' && t.ID_Tarefa_Predecessora) {
+      const pred = STATE.tarefas.find(p => p.ID_Tarefa === t.ID_Tarefa_Predecessora);
+      if (pred && pred.Status !== 'Concluído') {
+        alert(`🔒 Dependência Pendente: Conclua primeiro [${pred.ID_Tarefa}] "${pred.Titulo_Tarefa}"!`);
+        renderizarKanban();
+        return;
+      }
+    }
+    if (t) t.Status = novoStatus;
+    renderizarInterface();
+
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run
+        .withSuccessHandler(salvarCacheNavegador)
+        .withFailureHandler(err => { alert(err.message); sincronizarComServidor(); })
+        .apiAtualizarStatusTarefa(idTarefa, novoStatus);
+    }
+  }
+
+  function renderizarRotinas() {
+    const grid = document.getElementById('gridCardsRotinas');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    STATE.rotinas.forEach(r => {
+      const lista = r.checklist || [];
+      const card = document.createElement('div');
+      card.className = 'panel-box';
+      card.style.display = 'block';
+      card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;">
+          <span class="badge" style="background:#e0e7ff;color:#1d4ed8;">🔁 ${r.Frequencia}</span>
+          <span class="badge" style="background:${r.Status_Ciclo === 'Feito no Ciclo' ? '#dcfce7' : '#fef3c7'};">${r.Status_Ciclo}</span>
+        </div>
+        <h4 style="margin:8px 0;">${r.Titulo_Rotina}</h4>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">👤 ${r.Responsavel} · 📅 Próxima: ${r.Proxima_Execucao}</div>
+        <div style="margin-bottom:8px;">
+          ${lista.map((item, idx) => `
+            <label style="display:block;font-size:12px;margin-bottom:4px;">
+              <input type="checkbox" ${item.feito ? 'checked' : ''} onchange="alternarCheckRotina('${r.ID_Rotina}', ${idx})"> ${item.texto}
+            </label>
+          `).join('')}
+        </div>
+        <textarea id="descRot-${r.ID_Rotina}" placeholder="Informe a descrição desta atualização..." style="width:100%;height:50px;margin-bottom:6px;padding:6px;font-size:12px;"></textarea>
+        <button class="btn-primario" style="width:100%;" onclick="concluirCicloRotinaUI('${r.ID_Rotina}')">✅ Registrar Atualização & Avançar Ciclo</button>
+      `;
+      grid.appendChild(card);
+    });
+
+    const tbody = document.getElementById('tbodyHistoricoRotinas');
+    if (tbody) {
+      tbody.innerHTML = STATE.historicoRotinas.map(h => `
+        <tr><td>${h.Data_Hora_Registro}</td><td><strong>${h.Titulo_Rotina}</strong></td><td>${h.Responsavel}</td><td>${h.Descricao_Informada}</td><td>${h.Resumo_Checklist}</td></tr>
+      `).join('');
+    }
+  }
+
+  function alternarCheckRotina(idRotina, idx) {
+    const r = STATE.rotinas.find(x => x.ID_Rotina === idRotina);
+    if (r && r.checklist && r.checklist[idx]) {
+      r.checklist[idx].feito = !r.checklist[idx].feito;
+    }
+  }
+
+  function concluirCicloRotinaUI(idRotina) {
+    const desc = document.getElementById('descRot-' + idRotina).value.trim();
+    if (!desc) { alert('Informe uma breve descrição da atualização antes de concluir a rotina!'); return; }
+    const r = STATE.rotinas.find(x => x.ID_Rotina === idRotina);
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run.withSuccessHandler(salvarCacheNavegador).apiRegistrarCicloRotina(idRotina, r.checklist || [], desc);
+    }
+  }
+
+  function salvarNovaRotinaUI() {
+    const titulo = document.getElementById('rotTitulo').value.trim();
+    if (!titulo) return alert('Informe o título da rotina!');
+    const passos = document.getElementById('rotPassos').value.split(',').map(s => s.trim()).filter(Boolean);
+    const payload = {
+      titulo,
+      idTime: document.getElementById('rotTime').value,
+      responsavel: document.getElementById('rotResponsavel').value,
+      frequencia: document.getElementById('rotFrequencia').value,
+      proximaData: document.getElementById('rotData').value,
+      passos: passos.length ? passos : ['Executar verificação', 'Registrar evidência']
+    };
+    document.getElementById('rotTitulo').value = '';
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run.withSuccessHandler(salvarCacheNavegador).apiCriarRotina(payload);
+    }
+  }
+
+  function renderizarHierarquia() {
+    const cont = document.getElementById('containerArvoreObjetivos');
+    if (!cont) return;
+    cont.innerHTML = STATE.objetivos.map(o => {
+      const projs = STATE.projetos.filter(p => p.ID_Objetivo === o.ID_Objetivo);
+      return `
+        <div class="panel-box" style="display:block;">
+          <strong>🎯 ${o.Titulo_Objetivo}</strong> <span style="color:var(--muted);font-size:12px;">(Meta: ${o.Meta_Indicador})</span>
+          <ul style="margin:8px 0 0 18px;font-size:12px;">
+            ${projs.map(p => `<li>📁 <strong>${p.Nome_Projeto}</strong> — Líder: ${p.Lider}</li>`).join('')}
+          </ul>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderizarRelatorios() {
+    const tbRot = document.getElementById('tbodyRelRotinas');
+    if (tbRot) {
+      tbRot.innerHTML = STATE.rotinas.map(r => `
+        <tr><td><strong>${r.Titulo_Rotina}</strong></td><td>${r.Frequencia}</td><td>${r.Responsavel}</td><td>${(r.checklist||[]).length} passos</td><td>${r.Status_Ciclo}</td><td>${r.Ultima_Descricao}</td></tr>
+      `).join('');
+    }
+    const tbObj = document.getElementById('tbodyRelObjetivos');
+    if (tbObj) {
+      tbObj.innerHTML = STATE.objetivos.map(o => {
+        const t = STATE.tarefas.filter(x => x.ID_Objetivo === o.ID_Objetivo);
+        const feitas = t.filter(x => x.Status === 'Concluído').length;
+        const pct = t.length ? Math.round((feitas / t.length) * 100) : 0;
+        return `<tr><td><strong>${o.Titulo_Objetivo}</strong></td><td>${feitas}/${t.length}</td><td><strong>${pct}%</strong></td></tr>`;
+      }).join('');
+    }
+    const tbInd = document.getElementById('tbodyRelIndividuos');
+    if (tbInd) {
+      tbInd.innerHTML = STATE.membros.map(m => {
+        const t = STATE.tarefas.filter(x => x.Responsavel === m.Nome_Exibicao);
+        const feitas = t.filter(x => x.Status === 'Concluído').length;
+        const rots = STATE.rotinas.filter(r => r.Responsavel === m.Nome_Exibicao).length;
+        const pct = t.length ? Math.round((feitas / t.length) * 100) : 0;
+        return `<tr><td><strong>${m.Nome_Exibicao}</strong></td><td>${t.length - feitas}</td><td>${rots}</td><td><strong>${pct}%</strong></td></tr>`;
+      }).join('');
+    }
+  }
+
+  function renderizarConfig() {
+    const div = document.getElementById('listaTimesConfig');
+    if (div) {
+      div.innerHTML = STATE.times.map(t => `<span class="badge" style="background:${t.Cor_Hex};color:#fff;margin-right:8px;padding:6px 10px;">${t.Sigla} — ${t.Nome_Time}</span>`).join('');
+    }
+  }
+
+  function abrirModalNovaTarefa() { document.getElementById('modalNovaTarefa').classList.remove('hidden'); }
+  function fecharModalNovaTarefa() { document.getElementById('modalNovaTarefa').classList.add('hidden'); }
+
+  function confirmarCriacaoTarefa() {
+    const titulo = document.getElementById('modTituloTarefa').value.trim();
+    if (!titulo) return alert('Digite o título da tarefa!');
+    const idPrj = document.getElementById('modProjetoTarefa').value;
+    const prj = STATE.projetos.find(p => p.ID_Projeto === idPrj) || {};
+    const payload = {
+      titulo,
+      idProjeto: idPrj,
+      idObjetivo: prj.ID_Objetivo || '',
+      idTime: prj.ID_Time || '',
+      responsavel: document.getElementById('modRespTarefa').value,
+      dataInicio: document.getElementById('modInicioTarefa').value,
+      dataPrazo: document.getElementById('modPrazoTarefa').value,
+      prioridade: document.getElementById('modPrioTarefa').value,
+      dependeDe: document.getElementById('modDepTarefa').value
+    };
+    fecharModalNovaTarefa();
+    document.getElementById('modTituloTarefa').value = '';
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run.withSuccessHandler(salvarCacheNavegador).apiCriarTarefa(payload);
+    }
+  }
+
+  function criarTimeUI() {
+    const nome = document.getElementById('cfgTimeNome').value.trim();
+    const sigla = document.getElementById('cfgTimeSigla').value.trim();
+    const cor = document.getElementById('cfgTimeCor').value;
+    if (!nome || !sigla) return alert('Preencha nome e sigla!');
+    google.script.run.withSuccessHandler(salvarCacheNavegador).apiCriarItemEstrutura('TIME', { nome, sigla, cor });
+  }
+
+  function criarObjetivoUI() {
+    const titulo = document.getElementById('novoObjTitulo').value.trim();
+    if (!titulo) return;
+    google.script.run.withSuccessHandler(salvarCacheNavegador).apiCriarItemEstrutura('OBJETIVO', {
+      idTime: document.getElementById('novoObjTime').value,
+      titulo,
+      meta: document.getElementById('novoObjMeta').value
+    });
+  }
+
+  function criarProjetoUI() {
+    const nome = document.getElementById('novoPrjNome').value.trim();
+    if (!nome) return;
+    const idObj = document.getElementById('novoPrjObj').value;
+    const obj = STATE.objetivos.find(o => o.ID_Objetivo === idObj) || {};
+    google.script.run.withSuccessHandler(salvarCacheNavegador).apiCriarItemEstrutura('PROJETO', {
+      nome,
+      idObjetivo: idObj,
+      idTime: obj.ID_Time || '',
+      lider: document.getElementById('novoPrjLider').value
+    });
+  }
+
+  function abrirCommandPalette() {
+    document.getElementById('modalCommandPalette').classList.remove('hidden');
+    document.getElementById('inputBuscaComando').focus();
+    filtrarCommandPalette();
+  }
+  function fecharCommandPalette() {
+    document.getElementById('modalCommandPalette').classList.add('hidden');
+  }
+  function filtrarCommandPalette() {
+    const q = (document.getElementById('inputBuscaComando').value || '').toLowerCase();
+    const cont = document.getElementById('listaResultadosComando');
+    const itens = STATE.tarefas
+      .filter(t => t.Titulo_Tarefa.toLowerCase().includes(q) || t.ID_Tarefa.toLowerCase().includes(q))
+      .map(t => `<div style="padding:8px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="fecharCommandPalette();navegarPara('kanban')">📋 <strong>[${t.ID_Tarefa}]</strong> ${t.Titulo_Tarefa} (${t.Status})</div>`);
+    cont.innerHTML = itens.join('') || '<div style="padding:8px;color:var(--muted);">Nenhum resultado encontrado.</div>';
+  }
+</script>

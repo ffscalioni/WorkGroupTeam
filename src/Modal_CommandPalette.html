@@ -1,0 +1,7 @@
+<div id="modalCommandPalette" class="modal-backdrop hidden" onclick="if(event.target===this)fecharCommandPalette()">
+  <div class="modal-box">
+    <h3 style="margin-top:0;">⌨️ Busca Rápida & Comandos (Ctrl + K)</h3>
+    <input type="text" id="inputBuscaComando" placeholder="Digite o nome de uma tarefa, rotina ou comando..." style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;" oninput="filtrarCommandPalette()">
+    <div id="listaResultadosComando" style="max-height:260px;overflow-y:auto;"></div>
+  </div>
+</div>
