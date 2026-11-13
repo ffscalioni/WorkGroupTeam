@@ -1,10 +1,20 @@
 <script>
   const STORAGE_KEY = 'WORKSPACE_HUB_V4_CACHE';
+  let CARTAO_ARRASTADO_ID = null;
+  let OPERACOES_EM_BACKGROUND = 0;
+
   let STATE = {
     versaoCache: '0',
     usuarioEmail: '',
+    membroLogado: null,
+    perfilEfetivo: 'TIME',
     cotaEmail: 100,
+    agendamentoCache: { ativo: false, intervaloMinutos: 5, ultimoAquecimento: '-' },
+    planilhaUrl: '',
+    planilhaId: '',
     modoMeuDia: false,
+    modoMinhasAtividades: false,
+    horizonteRotinas: 'HOJE',
     times: [],
     membros: [],
     objetivos: [],
@@ -14,24 +24,128 @@
     historicoRotinas: []
   };
 
+  /* ==========================================================================
+     PROTEÇÃO CONTRA XSS
+     Todo dado vindo da planilha ou digitado por alguém passa por uma destas
+     funções antes de entrar em innerHTML. Nunca interpole um campo direto.
+     ========================================================================== */
+
+  /** Texto ou valor de atributo HTML: neutraliza < > & " ' */
+  function esc(valor) {
+    return String(valor === undefined || valor === null ? '' : valor)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  /** Valor usado como texto JavaScript dentro de um atributo, ex.: onclick="fn('...')" */
+  function escJs(valor) {
+    const comoTextoJs = String(valor === undefined || valor === null ? '' : valor)
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "\\'")
+      .replace(/[\r\n]/g, ' ')
+      .split(String.fromCharCode(8232)).join(' ')  // separador de linha Unicode
+      .split(String.fromCharCode(8233)).join(' '); // separador de parágrafo Unicode
+    return esc(comoTextoJs);
+  }
+
+  /** Cor usada em style="": só aceita hexadecimal, senão usa o azul padrão. */
+  function corSegura(valor) {
+    return /^#[0-9a-fA-F]{3,8}$/.test(String(valor || '')) ? valor : '#2563eb';
+  }
+
+  function gerarIdLocal(prefixo) {
+    return `${prefixo}-${Math.floor(1000 + Math.random() * 9000)}`;
+  }
+
+  function calcularProximaDataLocal(dataISO, frequencia) {
+    const hoje = new Date().toISOString().slice(0, 10);
+    const partes = String(dataISO || hoje).split('-');
+    const dt = partes.length === 3
+      ? new Date(Number(partes[0]), Number(partes[1]) - 1, Number(partes[2]))
+      : new Date();
+
+    if (frequencia === 'Diária') dt.setDate(dt.getDate() + 1);
+    else if (frequencia === 'Semanal') dt.setDate(dt.getDate() + 7);
+    else if (frequencia === 'Mensal') dt.setMonth(dt.getMonth() + 1);
+    else dt.setDate(dt.getDate() + 1);
+
+    const yyyy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function aplicarMutacaoLocalESincronizar(fnMutacaoNoState, fnDisparoBackendAssincrono, descricaoAcao) {
+    fnMutacaoNoState();
+    STATE.versaoCache = String(new Date().getTime());
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE));
+    popularSelects();
+    aplicarPermissoesDePerfilNaTela();
+    renderizarInterface();
+    atualizarContadorMinhasAtividades();
+
+    OPERACOES_EM_BACKGROUND++;
+    atualizarIndicadorSincroniaTopo(`⚡ Salvando (${descricaoAcao})...`, '#f59e0b');
+
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      const runner = google.script.run
+        .withSuccessHandler(respostaServidor => {
+          OPERACOES_EM_BACKGROUND = Math.max(0, OPERACOES_EM_BACKGROUND - 1);
+          if (respostaServidor && respostaServidor.versaoCache) {
+            STATE.versaoCache = String(respostaServidor.versaoCache);
+            if (respostaServidor.cotaEmail !== undefined) {
+              STATE.cotaEmail = respostaServidor.cotaEmail;
+              document.getElementById('lblCotaEmail').innerText = '📧 Cota MailApp: ' + STATE.cotaEmail;
+            }
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE));
+          }
+          if (OPERACOES_EM_BACKGROUND === 0) {
+            atualizarIndicadorSincroniaTopo(`✅ Sincronizado (Local ➔ Server RAM ➔ Sheets)`, '#38bdf8');
+          }
+        })
+        .withFailureHandler(erro => {
+          OPERACOES_EM_BACKGROUND = Math.max(0, OPERACOES_EM_BACKGROUND - 1);
+          atualizarIndicadorSincroniaTopo(`⚠️ Erro ao sincronizar: revertendo...`, '#ef4444');
+          alert('Não foi possível gravar a alteração no servidor: ' + erro.message);
+          sincronizarComServidor();
+        });
+
+      fnDisparoBackendAssincrono(runner);
+    }
+  }
+
+  function atualizarIndicadorSincroniaTopo(texto, corHex) {
+    const lbl = document.getElementById('lblVersaoCache');
+    if (lbl) {
+      lbl.innerText = texto;
+      lbl.style.color = corHex || '#38bdf8';
+    }
+  }
+
   window.addEventListener('DOMContentLoaded', () => {
-    // 1. Carrega instantaneamente do cache do navegador (0ms) se existir
+    const hoje = new Date().toISOString().slice(0, 10);
+    if (document.getElementById('quickInicio')) document.getElementById('quickInicio').value = hoje;
+    if (document.getElementById('quickPrazo')) document.getElementById('quickPrazo').value = hoje;
+    if (document.getElementById('rotData')) document.getElementById('rotData').value = hoje;
+
     const cacheLocal = localStorage.getItem(STORAGE_KEY);
     if (cacheLocal) {
       try {
         STATE = Object.assign(STATE, JSON.parse(cacheLocal));
         popularSelects();
+        aplicarPermissoesDePerfilNaTela();
         renderizarInterface();
+        atualizarContadorMinhasAtividades();
       } catch (e) {}
     }
 
-    // 2. Busca a versão atualizada do CacheService do Google Apps Script
     sincronizarComServidor();
-
-    // 3. Inicia Polling leve a cada 30 segundos sem refresh na página
     setInterval(verificarAtualizacaoSilenciosa, 30000);
 
-    // 4. Atalho global Ctrl+K para abrir o Command Palette
     window.addEventListener('keydown', (ev) => {
       if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
         ev.preventDefault();
@@ -40,13 +154,203 @@
     });
   });
 
+  function obterMembroGoogleAtivo() {
+    if (STATE.membroLogado && STATE.membroLogado.Nome_Exibicao) {
+      return STATE.membroLogado;
+    }
+    const email = String(STATE.usuarioEmail || '').trim().toLowerCase();
+    if (email) {
+      const encontrado = STATE.membros.find(m =>
+        String(m.Email_Google || '').trim().toLowerCase() === email
+      );
+      if (encontrado) return encontrado;
+    }
+    // Sem vínculo confirmado pelo servidor não há membro ativo (nada de "lembrar" o nome no navegador)
+    return null;
+  }
+
+  /**
+   * Perfil REAL do usuário, calculado pelo servidor (STATE.perfilEfetivo).
+   * Serve só para montar a tela: a permissão de verdade é validada no servidor.
+   */
+  function obterPerfilRealDoServidor() {
+    const p = String(STATE.perfilEfetivo || 'TIME').toUpperCase();
+    return (p === 'ADMIN' || p === 'GESTOR') ? p : 'TIME';
+  }
+
+  function obterPerfilAtivoNaTela() {
+    const perfilReal = obterPerfilRealDoServidor();
+    if (perfilReal === 'TIME') return 'TIME'; // perfil TIME não simula outras visões
+
+    const selVisao = document.getElementById('selSimuladorVisao');
+    const valorSimulado = selVisao ? selVisao.value : 'GESTOR';
+    if (valorSimulado && valorSimulado !== 'GESTOR') {
+      const mSimulado = STATE.membros.find(m => m.Nome_Exibicao === valorSimulado);
+      if (mSimulado) {
+        const p = String(mSimulado.Perfil_Acesso || 'TIME').toUpperCase();
+        return (p === 'ADMIN' || p === 'GESTOR') ? p : 'TIME';
+      }
+    }
+    return perfilReal;
+  }
+
+  function aplicarPermissoesDePerfilNaTela() {
+    // O simulador de visão só existe para Admin/Gestor (que já recebem todos os dados)
+    const caixaSimulador = document.querySelector('.simulador-box');
+    const selSimulador = document.getElementById('selSimuladorVisao');
+    const podeSimular = obterPerfilRealDoServidor() !== 'TIME';
+    if (caixaSimulador) caixaSimulador.classList.toggle('hidden', !podeSimular);
+    if (!podeSimular && selSimulador && selSimulador.value !== 'GESTOR') selSimulador.value = 'GESTOR';
+
+    const perfil = obterPerfilAtivoNaTela();
+    const btnRelatorios = document.getElementById('tabBtn-relatorios');
+    const btnConfig = document.getElementById('tabBtn-config');
+
+    if (btnRelatorios) {
+      btnRelatorios.classList.toggle('hidden', perfil === 'TIME');
+    }
+    if (btnConfig) {
+      btnConfig.classList.toggle('hidden', perfil === 'TIME');
+      btnConfig.innerText = perfil === 'GESTOR' ? '👥 Gestão de Usuários' : '⚙️ Config & Cache Server';
+    }
+
+    const bCache = document.getElementById('blocoAdminCache');
+    const bPresets = document.getElementById('blocoAdminPresets');
+    const bTimes = document.getElementById('blocoAdminTimes');
+    if (bCache) bCache.classList.toggle('hidden', perfil !== 'ADMIN');
+    if (bPresets) bPresets.classList.toggle('hidden', perfil !== 'ADMIN');
+    if (bTimes) bTimes.classList.toggle('hidden', perfil !== 'ADMIN');
+
+    if (perfil === 'TIME') {
+      const naRel = !document.getElementById('view-relatorios').classList.contains('hidden');
+      const naCfg = !document.getElementById('view-config').classList.contains('hidden');
+      if (naRel || naCfg) navegarPara('kanban');
+    }
+  }
+
+  function pertenceAoUsuarioGoogleLogado(item) {
+    const membro = obterMembroGoogleAtivo();
+    const emailLogado = String(STATE.usuarioEmail || '').trim().toLowerCase();
+    const resp = String(item.Responsavel || '').trim().toLowerCase();
+    const permitidos = String(item.Usuarios_Permitidos || '').toLowerCase();
+
+    if (emailLogado && (resp === emailLogado || permitidos.includes(emailLogado))) {
+      return true;
+    }
+    if (membro) {
+      const nome = String(membro.Nome_Exibicao || '').trim().toLowerCase();
+      const emailMem = String(membro.Email_Google || '').trim().toLowerCase();
+      if (nome && (resp === nome || permitidos.includes(nome))) return true;
+      if (emailMem && (resp === emailMem || permitidos.includes(emailMem))) return true;
+    }
+    return false;
+  }
+
+  function usuarioPodeDarCheckNaRotina(rotina) {
+    const perfil = obterPerfilAtivoNaTela();
+    if (perfil === 'ADMIN' || perfil === 'GESTOR') return true;
+
+    const selVisao = document.getElementById('selSimuladorVisao');
+    const valorSimulado = selVisao ? selVisao.value : 'GESTOR';
+    if (valorSimulado && valorSimulado !== 'GESTOR') {
+      return String(rotina.Responsavel || '').trim() === valorSimulado;
+    }
+
+    return pertenceAoUsuarioGoogleLogado(rotina);
+  }
+
+  function atualizarContadorMinhasAtividades() {
+    const minhasTarefas = STATE.tarefas.filter(t => t.Status !== 'Concluído' && pertenceAoUsuarioGoogleLogado(t));
+    const minhasRotinas = STATE.rotinas.filter(r => r.Status_Ciclo !== 'Finalizada' && pertenceAoUsuarioGoogleLogado(r));
+    const badgeCount = document.getElementById('badgeMinhasCount');
+    if (badgeCount) {
+      badgeCount.innerText = `(${minhasTarefas.length + minhasRotinas.length})`;
+    }
+  }
+
+  function alternarMinhasAtividades() {
+    const membro = obterMembroGoogleAtivo();
+    if (!membro) {
+      vincularMinhaContaGoogleUI(true);
+      return;
+    }
+
+    STATE.modoMinhasAtividades = !STATE.modoMinhasAtividades;
+    const btn = document.getElementById('btnMinhasAtividades');
+    if (btn) {
+      btn.style.background = STATE.modoMinhasAtividades ? '#2563eb' : '#e0e7ff';
+      btn.style.color = STATE.modoMinhasAtividades ? '#ffffff' : '#1d4ed8';
+    }
+    renderizarInterface();
+  }
+
+  function vincularMinhaContaGoogleUI(ativarFiltroDepois) {
+    const emailDetectado = STATE.usuarioEmail || 'seu.email@empresa.com';
+    const nomesExistentes = STATE.membros.map(m => m.Nome_Exibicao).join(', ');
+    const nomeEscolhido = prompt(
+      `🔗 VINCULAR CONTA GOOGLE (${emailDetectado})\n\n` +
+      `Digite seu Nome de Exibição exatamente como está na equipe (ou digite seu nome para criar seu cadastro agora):\n` +
+      `Membros atuais: ${nomesExistentes}`,
+      STATE.membroLogado ? STATE.membroLogado.Nome_Exibicao : ''
+    );
+
+    if (!nomeEscolhido || !nomeEscolhido.trim()) return;
+
+    const timePadrao = STATE.times[0] ? STATE.times[0].ID_Time : 'TM-DATA';
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run
+        .withSuccessHandler(res => {
+          if (ativarFiltroDepois) STATE.modoMinhasAtividades = true;
+          salvarCacheNavegador(res);
+          alert(`✅ Conta Google (${res.usuarioEmail || emailDetectado}) vinculada com sucesso a "${nomeEscolhido.trim()}"!`);
+        })
+        .withFailureHandler(err => {
+          alert('Não foi possível vincular sua conta: ' + err.message);
+        })
+        .apiVincularMeuEmailGoogle(nomeEscolhido.trim(), timePadrao);
+    }
+  }
+
   function salvarCacheNavegador(novoEstado) {
     STATE = Object.assign(STATE, novoEstado);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE));
-    document.getElementById('lblVersaoCache').innerText = 'Versão RAM: ' + STATE.versaoCache;
-    document.getElementById('lblUsuarioAtivo').innerText = 'Conectado como: ' + STATE.usuarioEmail;
+
+    atualizarIndicadorSincroniaTopo('🟢 RAM v' + STATE.versaoCache, '#38bdf8');
+
+    const membroAtivo = obterMembroGoogleAtivo();
+    const textoIdentificacao = membroAtivo
+      ? `🟢 Conta Google: ${STATE.usuarioEmail || membroAtivo.Email_Google} ➔ ${membroAtivo.Nome_Exibicao} [Perfil: ${membroAtivo.Perfil_Acesso}]`
+      : `🟡 Conta Google: ${STATE.usuarioEmail || 'Não vinculado'} (Clique em "🔗 Vincular Meu E-mail Google")`;
+    document.getElementById('lblUsuarioAtivo').innerText = textoIdentificacao;
     document.getElementById('lblCotaEmail').innerText = '📧 Cota MailApp: ' + STATE.cotaEmail;
+
+    atualizarContadorMinhasAtividades();
+
+    const ag = STATE.agendamentoCache || { ativo: false, intervaloMinutos: 5, ultimoAquecimento: '-' };
+    const lblAg = document.getElementById('lblStatusAgendamento');
+    if (lblAg) {
+      lblAg.innerText = ag.ativo
+        ? `⏰ Cache Server: Ativo (${ag.intervaloMinutos} min)`
+        : '⚠️ Cache Server: Clique em Configurar p/ Agendar 5 min';
+    }
+    const badgeTrig = document.getElementById('badgeStatusTrigger');
+    if (badgeTrig) {
+      badgeTrig.innerText = ag.ativo ? `🟢 Ativo no Google (a cada ${ag.intervaloMinutos} min)` : '🔴 Ainda não agendado';
+    }
+    if (document.getElementById('txtUltimoWarmup')) {
+      document.getElementById('txtUltimoWarmup').value = ag.ultimoAquecimento || '-';
+    }
+    if (document.getElementById('selIntervaloCache') && ag.intervaloMinutos) {
+      document.getElementById('selIntervaloCache').value = String(ag.intervaloMinutos);
+    }
+
+    const btnPlanilha = document.getElementById('linkPlanilhaBase');
+    if (btnPlanilha && STATE.planilhaUrl) {
+      btnPlanilha.href = STATE.planilhaUrl;
+    }
+
     popularSelects();
+    aplicarPermissoesDePerfilNaTela();
     renderizarInterface();
   }
 
@@ -57,9 +361,10 @@
   }
 
   function verificarAtualizacaoSilenciosa() {
+    if (OPERACOES_EM_BACKGROUND > 0) return;
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       google.script.run.withSuccessHandler(res => {
-        if (res && String(res.versaoCache) !== String(STATE.versaoCache)) {
+        if (res && String(res.versaoCache) !== String(STATE.versaoCache) && OPERACOES_EM_BACKGROUND === 0) {
           sincronizarComServidor();
         }
       }).apiVerificarVersaoCache();
@@ -67,8 +372,58 @@
   }
 
   function forcarSincroniaServidor() {
+    atualizarIndicadorSincroniaTopo('🔄 Recarregando Sheets ➔ RAM...', '#f59e0b');
     if (typeof google !== 'undefined' && google.script && google.script.run) {
-      google.script.run.withSuccessHandler(salvarCacheNavegador).apiForcarRecargaCache();
+      google.script.run
+        .withSuccessHandler(salvarCacheNavegador)
+        .withFailureHandler(err => {
+          atualizarIndicadorSincroniaTopo('⚠️ Sincronização recusada', '#ef4444');
+          alert(err.message);
+        })
+        .apiForcarRecargaCache();
+    }
+  }
+
+  function salvarAgendamentoCacheUI() {
+    const min = Number(document.getElementById('selIntervaloCache').value || 5);
+    const badge = document.getElementById('badgeStatusTrigger');
+    if (badge) badge.innerText = '⏳ Registrando gatilho de ' + min + ' min no Google...';
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run
+        .withSuccessHandler(res => {
+          salvarCacheNavegador(res);
+          alert(`✅ Agendamento ativado! O servidor do Google agora carrega o JSON paginado no CacheService a cada ${min} minutos.`);
+        })
+        .withFailureHandler(err => alert('Erro ao agendar: ' + err.message))
+        .apiConfigurarAgendamentoCache(min);
+    }
+  }
+
+  function aplicarPresetUI(codigoPreset) {
+    if (!confirm('Deseja adicionar os dados de exemplo deste Preset na sua planilha e nos dois caches?')) return;
+    atualizarIndicadorSincroniaTopo('⚡ Aplicando Preset...', '#f59e0b');
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run
+        .withSuccessHandler(res => {
+          salvarCacheNavegador(res);
+          alert('✅ Preset adicionado com sucesso!');
+        })
+        .withFailureHandler(err => {
+          atualizarIndicadorSincroniaTopo('⚠️ Preset não aplicado', '#ef4444');
+          alert('Não foi possível aplicar o preset: ' + err.message);
+        })
+        .apiAplicarPresetArea(codigoPreset);
+    }
+  }
+
+  function gerarFormulaGeminiPlanilhaUI() {
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      google.script.run
+        .withSuccessHandler(res => {
+          alert(`✨ ${res.mensagem}\nClique em "📊 Abrir Planilha Base" no topo para ver a aba IA_Gemini_Workspace!`);
+        })
+        .withFailureHandler(err => alert('Não foi possível gerar o resumo: ' + err.message))
+        .apiInserirFormulaGeminiPlanilha();
     }
   }
 
@@ -85,33 +440,110 @@
     renderizarInterface();
   }
 
+  function itemVisivelParaSimulador(item) {
+    const visao = document.getElementById('selSimuladorVisao') ? document.getElementById('selSimuladorVisao').value : 'GESTOR';
+    if (!visao || visao === 'GESTOR') return true;
+    const membro = STATE.membros.find(m => m.Nome_Exibicao === visao);
+    if (!membro || membro.Perfil_Acesso === 'ADMIN' || membro.Perfil_Acesso === 'GESTOR') return true;
+
+    const tipoVis = item.Tipo_Visibilidade || 'PUBLICO';
+    if (tipoVis === 'PUBLICO') return true;
+    if (tipoVis === 'TIME') return item.ID_Time === membro.ID_Time_Principal;
+    if (tipoVis === 'RESTRITO') {
+      const permitidos = String(item.Usuarios_Permitidos || '');
+      return permitidos.includes(membro.Nome_Exibicao) ||
+             permitidos.includes(membro.Email_Google) ||
+             item.Responsavel === membro.Nome_Exibicao ||
+             item.Lider === membro.Nome_Exibicao;
+    }
+    return true;
+  }
+
   function popularSelects() {
     const fTime = document.getElementById('filtroTimeKanban');
     const fObj = document.getElementById('filtroObjetivoKanban');
-    if (!fTime || !fObj) return;
+    const fPrj = document.getElementById('filtroProjetoKanban');
+    const selVisao = document.getElementById('selSimuladorVisao');
+    if (!fTime) return;
 
-    fTime.innerHTML = '<option value="TODOS">Todos os Times</option>' +
-      STATE.times.map(t => `<option value="${t.ID_Time}">${t.Nome_Time}</option>`).join('');
+    const valTime = fTime.value || 'TODOS';
+    const valObj = fObj.value || 'TODOS';
+    const valPrj = fPrj ? (fPrj.value || 'TODOS') : 'TODOS';
+    const valVisao = selVisao ? (selVisao.value || 'GESTOR') : 'GESTOR';
+
+    fTime.innerHTML = '<option value="TODOS">Todas as Áreas / Times</option>' +
+      STATE.times.map(t => `<option value="${esc(t.ID_Time)}">${esc(t.Sigla)} — ${esc(t.Nome_Time)}</option>`).join('');
     fObj.innerHTML = '<option value="TODOS">Todos os Objetivos</option>' +
-      STATE.objetivos.map(o => `<option value="${o.ID_Objetivo}">${o.Titulo_Objetivo}</option>`).join('');
+      STATE.objetivos.map(o => `<option value="${esc(o.ID_Objetivo)}">${esc(o.Titulo_Objetivo)}</option>`).join('');
+    if (fPrj) {
+      fPrj.innerHTML = '<option value="TODOS">Todos os Projetos</option>' +
+        STATE.projetos.map(p => `<option value="${esc(p.ID_Projeto)}">${esc(p.Nome_Projeto)}</option>`).join('');
+    }
+    if (selVisao) {
+      selVisao.innerHTML = '<option value="GESTOR">👑 Simular Admin/Gestor (Vê Tudo)</option>' +
+        STATE.membros.map(m => `<option value="${esc(m.Nome_Exibicao)}">👤 ${esc(m.Nome_Exibicao)} [Perfil: ${esc(m.Perfil_Acesso)}]</option>`).join('');
+    }
 
-    const optsTime = STATE.times.map(t => `<option value="${t.ID_Time}">${t.Nome_Time}</option>`).join('');
-    const optsMembros = STATE.membros.map(m => `<option value="${m.Nome_Exibicao}">${m.Nome_Exibicao}</option>`).join('');
-    const optsProj = STATE.projetos.map(p => `<option value="${p.ID_Projeto}">${p.Nome_Projeto}</option>`).join('');
-    const optsObj = STATE.objetivos.map(o => `<option value="${o.ID_Objetivo}">${o.Titulo_Objetivo}</option>`).join('');
+    fTime.value = valTime;
+    fObj.value = valObj;
+    if (fPrj) fPrj.value = valPrj;
+    if (selVisao) selVisao.value = valVisao;
 
-    document.getElementById('rotTime').innerHTML = optsTime;
-    document.getElementById('rotResponsavel').innerHTML = optsMembros;
-    document.getElementById('novoObjTime').innerHTML = optsTime;
-    document.getElementById('novoPrjObj').innerHTML = optsObj;
-    document.getElementById('novoPrjLider').innerHTML = optsMembros;
-    document.getElementById('modProjetoTarefa').innerHTML = optsProj;
-    document.getElementById('modRespTarefa').innerHTML = optsMembros;
-    document.getElementById('modDepTarefa').innerHTML = '<option value="">Sem dependência</option>' +
-      STATE.tarefas.map(t => `<option value="${t.ID_Tarefa}">[${t.ID_Tarefa}] ${t.Titulo_Tarefa}</option>`).join('');
+    const optsTime = STATE.times.map(t => `<option value="${esc(t.ID_Time)}">${esc(t.Sigla)} — ${esc(t.Nome_Time)}</option>`).join('');
+    const optsMembros = STATE.membros.map(m => `<option value="${esc(m.Nome_Exibicao)}">${esc(m.Nome_Exibicao)}</option>`).join('');
+    const optsProj = '<option value="">Sem projeto específico</option>' +
+      STATE.projetos.map(p => `<option value="${esc(p.ID_Projeto)}">${esc(p.Nome_Projeto)}</option>`).join('');
+    const optsObj = '<option value="">Selecione um Objetivo...</option>' +
+      STATE.objetivos.map(o => `<option value="${esc(o.ID_Objetivo)}">${esc(o.Titulo_Objetivo)}</option>`).join('');
+    const optsDep = '<option value="">Sem dependência</option>' +
+      STATE.tarefas.map(t => `<option value="${esc(t.ID_Tarefa)}">[${esc(t.ID_Tarefa)}] ${esc(t.Titulo_Tarefa)}</option>`).join('');
+
+    if (document.getElementById('quickObjetivo')) document.getElementById('quickObjetivo').innerHTML = optsObj;
+    if (document.getElementById('quickProjeto')) document.getElementById('quickProjeto').innerHTML = optsProj;
+    if (document.getElementById('quickResponsavel')) document.getElementById('quickResponsavel').innerHTML = optsMembros;
+    if (document.getElementById('quickDependencia')) document.getElementById('quickDependencia').innerHTML = optsDep;
+
+    const meuMembro = obterMembroGoogleAtivo();
+    if (meuMembro && document.getElementById('quickResponsavel')) {
+      document.getElementById('quickResponsavel').value = meuMembro.Nome_Exibicao;
+    }
+
+    if (document.getElementById('rotTime')) document.getElementById('rotTime').innerHTML = optsTime;
+    if (document.getElementById('rotResponsavel')) document.getElementById('rotResponsavel').innerHTML = optsMembros;
+    if (document.getElementById('novoObjTime')) document.getElementById('novoObjTime').innerHTML = optsTime;
+    if (document.getElementById('novoPrjObj')) document.getElementById('novoPrjObj').innerHTML = optsObj;
+    if (document.getElementById('novoPrjLider')) document.getElementById('novoPrjLider').innerHTML = optsMembros;
+    if (document.getElementById('cfgMemTime')) document.getElementById('cfgMemTime').innerHTML = optsTime;
+    if (document.getElementById('modObjetivoTarefa')) document.getElementById('modObjetivoTarefa').innerHTML = optsObj;
+    if (document.getElementById('modProjetoTarefa')) document.getElementById('modProjetoTarefa').innerHTML = optsProj;
+    if (document.getElementById('modRespTarefa')) document.getElementById('modRespTarefa').innerHTML = optsMembros;
+    if (document.getElementById('modDepTarefa')) document.getElementById('modDepTarefa').innerHTML = optsDep;
+  }
+
+  function aoMudarObjetivoQuick() {
+    const idObj = document.getElementById('quickObjetivo').value;
+    const selProj = document.getElementById('quickProjeto');
+    const projsFiltrados = idObj
+      ? STATE.projetos.filter(p => p.ID_Objetivo === idObj)
+      : STATE.projetos;
+    selProj.innerHTML = '<option value="">Sem projeto específico</option>' +
+      projsFiltrados.map(p => `<option value="${esc(p.ID_Projeto)}">${esc(p.Nome_Projeto)}</option>`).join('');
+    if (projsFiltrados[0]) selProj.value = projsFiltrados[0].ID_Projeto;
+  }
+
+  function aoMudarObjetivoModal() {
+    const idObj = document.getElementById('modObjetivoTarefa').value;
+    const selProj = document.getElementById('modProjetoTarefa');
+    const projsFiltrados = idObj
+      ? STATE.projetos.filter(p => p.ID_Objetivo === idObj)
+      : STATE.projetos;
+    selProj.innerHTML = '<option value="">Sem projeto específico</option>' +
+      projsFiltrados.map(p => `<option value="${esc(p.ID_Projeto)}">${esc(p.Nome_Projeto)}</option>`).join('');
+    if (projsFiltrados[0]) selProj.value = projsFiltrados[0].ID_Projeto;
   }
 
   function renderizarInterface() {
+    aplicarPermissoesDePerfilNaTela();
     renderizarKanban();
     renderizarRotinas();
     renderizarHierarquia();
@@ -119,22 +551,52 @@
     renderizarConfig();
   }
 
+  function iniciarArrasteCartao(ev, idTarefa) {
+    CARTAO_ARRASTADO_ID = idTarefa;
+    ev.dataTransfer.setData('text/plain', idTarefa);
+    ev.dataTransfer.effectAllowed = 'move';
+  }
+
+  function permitirSoltarCartao(ev, elColuna) {
+    ev.preventDefault();
+    elColuna.classList.add('drag-over');
+  }
+
+  function sairArrasteColuna(elColuna) {
+    elColuna.classList.remove('drag-over');
+  }
+
+  function soltarCartaoNaColuna(ev, novoStatus, elColuna) {
+    ev.preventDefault();
+    elColuna.classList.remove('drag-over');
+    const idTarefa = ev.dataTransfer.getData('text/plain') || CARTAO_ARRASTADO_ID;
+    if (!idTarefa) return;
+    mudarStatusTarefaUI(idTarefa, novoStatus);
+    CARTAO_ARRASTADO_ID = null;
+  }
+
   function renderizarKanban() {
     const cols = ['A Fazer', 'Em Andamento', 'Bloqueado', 'Concluído'];
+    const iconeCol = { 'A Fazer': '📌', 'Em Andamento': '⚡', 'Bloqueado': '🚨', 'Concluído': '✅' };
     const cont = document.getElementById('containerColunasKanban');
     if (!cont) return;
     cont.innerHTML = '';
 
     const fTime = document.getElementById('filtroTimeKanban').value || 'TODOS';
     const fObj = document.getElementById('filtroObjetivoKanban').value || 'TODOS';
+    const fPrj = document.getElementById('filtroProjetoKanban') ? document.getElementById('filtroProjetoKanban').value : 'TODOS';
     const fAg = document.getElementById('filtroAgendamentoKanban').value || 'TODAS';
     const hoje = new Date().toISOString().slice(0, 10);
 
-    cols.forEach(status => {
+    cols.forEach((status, idxCol) => {
       const tarefasCol = STATE.tarefas.filter(t => {
+        if (!itemVisivelParaSimulador(t)) return false;
+        if (STATE.modoMinhasAtividades && !pertenceAoUsuarioGoogleLogado(t)) return false;
         if (t.Status !== status) return false;
         if (fTime !== 'TODOS' && t.ID_Time !== fTime) return false;
         if (fObj !== 'TODOS' && t.ID_Objetivo !== fObj) return false;
+        if (fPrj !== 'TODOS' && t.ID_Projeto !== fPrj) return false;
+        if (STATE.modoMeuDia && t.Data_Inicio > hoje) return false;
         if (fAg === 'HOJE' && t.Data_Inicio > hoje) return false;
         if (fAg === 'FUTURAS' && (!t.Data_Inicio || t.Data_Inicio <= hoje)) return false;
         if (fAg === 'DEPENDENCIA' && !t.ID_Tarefa_Predecessora) return false;
@@ -143,160 +605,827 @@
 
       const divCol = document.createElement('div');
       divCol.className = 'kanban-col';
-      divCol.innerHTML = `<div class="kanban-col-header"><span>${status}</span><span>${tarefasCol.length}</span></div>`;
+      divCol.setAttribute('ondragover', 'permitirSoltarCartao(event, this)');
+      divCol.setAttribute('ondragleave', 'sairArrasteColuna(this)');
+      divCol.setAttribute('ondrop', `soltarCartaoNaColuna(event, '${status}', this)`);
+
+      divCol.innerHTML = `
+        <div class="kanban-col-header">
+          <span>${iconeCol[status] || ''} ${status}</span>
+          <span class="col-count">${tarefasCol.length}</span>
+        </div>
+        <div class="kanban-dropzone"></div>
+      `;
+      const dropzone = divCol.querySelector('.kanban-dropzone');
 
       tarefasCol.forEach(t => {
+        const timeObj = STATE.times.find(tm => tm.ID_Time === t.ID_Time) || { Sigla: 'ÁREA', Cor_Hex: '#2563eb' };
+        const objEstrategico = STATE.objetivos.find(o => o.ID_Objetivo === t.ID_Objetivo);
+        const projObj = STATE.projetos.find(p => p.ID_Projeto === t.ID_Projeto);
+        const ehFutura = t.Data_Inicio && t.Data_Inicio > hoje;
+        const qtdDependentes = STATE.tarefas.filter(d => String(d.ID_Tarefa_Predecessora) === String(t.ID_Tarefa) && d.Status !== 'Concluído').length;
+
         let htmlDep = '';
         if (t.ID_Tarefa_Predecessora) {
           const pred = STATE.tarefas.find(p => String(p.ID_Tarefa) === String(t.ID_Tarefa_Predecessora));
           const liberada = pred && pred.Status === 'Concluído';
-          htmlDep = `<div class="${liberada ? 'dep-ok' : 'dep-alert'}">${liberada ? '🔓 Liberada por' : '🔒 Aguardando'} [${t.ID_Tarefa_Predecessora}]</div>`;
+          htmlDep = `<div class="${liberada ? 'dep-ok' : 'dep-alert'}">${liberada ? '🔓 Liberada por:' : '🔒 Aguardando:'} [${esc(t.ID_Tarefa_Predecessora)}] ${esc(pred ? pred.Titulo_Tarefa : '')}</div>`;
         }
 
+        const statusAnterior = idxCol > 0 ? cols[idxCol - 1] : null;
+        const statusProximo = idxCol < cols.length - 1 ? cols[idxCol + 1] : null;
+
         const card = document.createElement('div');
-        card.className = 'card-task';
+        card.className = `card-task prio-${t.Prioridade || 'Média'}`;
+        card.setAttribute('draggable', 'true');
+        card.addEventListener('dragstart', ev => iniciarArrasteCartao(ev, t.ID_Tarefa));
+
         card.innerHTML = `
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);">
-            <strong>${t.ID_Tarefa}</strong><span>📅 ${t.Data_Prazo || '-'}</span>
+          <div class="card-top-badges">
+            <div style="display:flex;gap:4px;flex-wrap:wrap;">
+              <span class="badge" style="background:${corSegura(timeObj.Cor_Hex)};color:#fff;">${esc(timeObj.Sigla)}</span>
+              ${objEstrategico ? `<span class="badge" style="background:#dbeafe;color:#1e40af;">🎯 ${esc(objEstrategico.Titulo_Objetivo)}</span>` : ''}
+              ${projObj ? `<span class="badge badge-project">📁 ${esc(projObj.Nome_Projeto)}</span>` : ''}
+              ${ehFutura ? `<span class="badge badge-future">🗓️ ${esc(t.Data_Inicio)}</span>` : ''}
+              ${qtdDependentes > 0 ? `<span class="badge badge-bottleneck">🔥 Destrava ${qtdDependentes}</span>` : ''}
+            </div>
+            <button class="btn-arrow" title="Editar ou Excluir Tarefa" onclick="abrirModalEditarTarefa('${escJs(t.ID_Tarefa)}')">✏️</button>
           </div>
-          <div style="font-weight:700;font-size:13px;margin:5px 0;">${t.Titulo_Tarefa}</div>
+          <div class="task-title">[${esc(t.ID_Tarefa)}] ${esc(t.Titulo_Tarefa)}</div>
           ${htmlDep}
-          <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">👤 ${t.Responsavel}</div>
-          <select style="width:100%;padding:5px;border-radius:5px;font-size:11px;" onchange="mudarStatusTarefaUI('${t.ID_Tarefa}', this.value)">
-            ${cols.map(c => `<option value="${c}" ${t.Status === c ? 'selected' : ''}>${c}</option>`).join('')}
-          </select>
+          <div class="task-meta">
+            👤 <strong>${esc(t.Responsavel)}</strong> · 📅 Prazo: ${esc(t.Data_Prazo || '-')}<br>
+            👁️ ${esc(t.Tipo_Visibilidade || 'PUBLICO')}
+          </div>
+          <div class="card-actions">
+            ${statusAnterior ? `<button class="btn-arrow" title="Voltar para ${statusAnterior}" onclick="mudarStatusTarefaUI('${escJs(t.ID_Tarefa)}', '${statusAnterior}')">◀</button>` : ''}
+            <select class="status-select-card" onchange="mudarStatusTarefaUI('${escJs(t.ID_Tarefa)}', this.value)">
+              ${cols.map(c => `<option value="${c}" ${t.Status === c ? 'selected' : ''}>${c}</option>`).join('')}
+            </select>
+            ${statusProximo ? `<button class="btn-arrow" title="Avançar para ${statusProximo}" onclick="mudarStatusTarefaUI('${escJs(t.ID_Tarefa)}', '${statusProximo}')">▶</button>` : ''}
+          </div>
         `;
-        divCol.appendChild(card);
+        dropzone.appendChild(card);
       });
+
       cont.appendChild(divCol);
     });
   }
 
+  function criarTarefaRapidaBarra() {
+    const titulo = document.getElementById('quickTitulo').value.trim();
+    if (!titulo) return alert('Digite a descrição da atividade!');
+    const idProjeto = document.getElementById('quickProjeto').value;
+    const idObjetivoSelecionado = document.getElementById('quickObjetivo').value;
+    const prj = STATE.projetos.find(p => p.ID_Projeto === idProjeto) || {};
+    const obj = STATE.objetivos.find(o => o.ID_Objetivo === (idObjetivoSelecionado || prj.ID_Objetivo)) || {};
+    const idNovo = gerarIdLocal('ATV');
+
+    const payload = {
+      idTarefa: idNovo,
+      titulo,
+      idProjeto: idProjeto || '',
+      idObjetivo: idObjetivoSelecionado || prj.ID_Objetivo || '',
+      idTime: prj.ID_Time || obj.ID_Time || (STATE.times[0] ? STATE.times[0].ID_Time : ''),
+      responsavel: document.getElementById('quickResponsavel').value,
+      dataInicio: document.getElementById('quickInicio').value,
+      dataPrazo: document.getElementById('quickPrazo').value,
+      prioridade: 'Média',
+      dependeDe: document.getElementById('quickDependencia').value,
+      tipoVisibilidade: document.getElementById('quickVisibilidade').value,
+      status: 'A Fazer'
+    };
+
+    document.getElementById('quickTitulo').value = '';
+
+    aplicarMutacaoLocalESincronizar(
+      () => {
+        STATE.tarefas.push({
+          ID_Tarefa: payload.idTarefa,
+          Titulo_Tarefa: payload.titulo,
+          ID_Projeto: payload.idProjeto,
+          ID_Objetivo: payload.idObjetivo,
+          ID_Time: payload.idTime,
+          Tipo_Demanda: 'Entrega de Projeto',
+          Responsavel: payload.responsavel,
+          Status: 'A Fazer',
+          Prioridade: payload.prioridade,
+          Data_Inicio: payload.dataInicio,
+          Data_Prazo: payload.dataPrazo,
+          ID_Tarefa_Predecessora: payload.dependeDe,
+          Tipo_Visibilidade: payload.tipoVisibilidade,
+          Usuarios_Permitidos: '',
+          Atualizado_Em: new Date().toISOString()
+        });
+      },
+      runner => runner.apiCriarTarefa(payload),
+      'Nova Tarefa'
+    );
+  }
+
   function mudarStatusTarefaUI(idTarefa, novoStatus) {
-    const t = STATE.tarefas.find(x => x.ID_Tarefa === idTarefa);
-    if (t && novoStatus === 'Concluído' && t.ID_Tarefa_Predecessora) {
-      const pred = STATE.tarefas.find(p => p.ID_Tarefa === t.ID_Tarefa_Predecessora);
+    const t = STATE.tarefas.find(x => String(x.ID_Tarefa) === String(idTarefa));
+    if (!t || t.Status === novoStatus) return;
+
+    if (novoStatus === 'Concluído' && t.ID_Tarefa_Predecessora) {
+      const pred = STATE.tarefas.find(p => String(p.ID_Tarefa) === String(t.ID_Tarefa_Predecessora));
       if (pred && pred.Status !== 'Concluído') {
-        alert(`🔒 Dependência Pendente: Conclua primeiro [${pred.ID_Tarefa}] "${pred.Titulo_Tarefa}"!`);
+        alert(`🔒 Dependência Bloqueada!\nA tarefa [${t.ID_Tarefa}] depende da conclusão de [${pred.ID_Tarefa}] "${pred.Titulo_Tarefa}".`);
         renderizarKanban();
         return;
       }
     }
-    if (t) t.Status = novoStatus;
-    renderizarInterface();
 
-    if (typeof google !== 'undefined' && google.script && google.script.run) {
-      google.script.run
-        .withSuccessHandler(salvarCacheNavegador)
-        .withFailureHandler(err => { alert(err.message); sincronizarComServidor(); })
-        .apiAtualizarStatusTarefa(idTarefa, novoStatus);
+    aplicarMutacaoLocalESincronizar(
+      () => { t.Status = novoStatus; },
+      runner => runner.apiAtualizarStatusTarefa(idTarefa, novoStatus),
+      'Status ' + idTarefa
+    );
+  }
+
+  function abrirModalNovaTarefa() {
+    const hoje = new Date().toISOString().slice(0, 10);
+    document.getElementById('tituloModalTarefa').innerText = '➕ Incluir Nova Atividade';
+    document.getElementById('modIdTarefaEdicao').value = '';
+    document.getElementById('modTituloTarefa').value = '';
+    document.getElementById('modObjetivoTarefa').value = '';
+    document.getElementById('modProjetoTarefa').value = '';
+    document.getElementById('modInicioTarefa').value = hoje;
+    document.getElementById('modPrazoTarefa').value = hoje;
+    document.getElementById('modDepTarefa').value = '';
+    document.getElementById('modVisibilidadeTarefa').value = 'PUBLICO';
+    document.getElementById('modUsuariosPermitidos').value = '';
+    document.getElementById('btnExcluirNoModal').classList.add('hidden');
+    document.getElementById('modalNovaTarefa').classList.remove('hidden');
+  }
+
+  function abrirModalEditarTarefa(idTarefa) {
+    const t = STATE.tarefas.find(x => String(x.ID_Tarefa) === String(idTarefa));
+    if (!t) return;
+    document.getElementById('tituloModalTarefa').innerText = `✏️ Editar Atividade [${t.ID_Tarefa}]`;
+    document.getElementById('modIdTarefaEdicao').value = t.ID_Tarefa;
+    document.getElementById('modTituloTarefa').value = t.Titulo_Tarefa || '';
+    document.getElementById('modObjetivoTarefa').value = t.ID_Objetivo || '';
+    document.getElementById('modProjetoTarefa').value = t.ID_Projeto || '';
+    document.getElementById('modRespTarefa').value = t.Responsavel || '';
+    document.getElementById('modInicioTarefa').value = t.Data_Inicio || '';
+    document.getElementById('modPrazoTarefa').value = t.Data_Prazo || '';
+    document.getElementById('modPrioTarefa').value = t.Prioridade || 'Média';
+    document.getElementById('modDepTarefa').value = t.ID_Tarefa_Predecessora || '';
+    document.getElementById('modVisibilidadeTarefa').value = t.Tipo_Visibilidade || 'PUBLICO';
+    document.getElementById('modUsuariosPermitidos').value = t.Usuarios_Permitidos || '';
+    document.getElementById('btnExcluirNoModal').classList.remove('hidden');
+    document.getElementById('modalNovaTarefa').classList.remove('hidden');
+  }
+
+  function fecharModalNovaTarefa() {
+    document.getElementById('modalNovaTarefa').classList.add('hidden');
+  }
+
+  function confirmarCriacaoOuEdicaoTarefa() {
+    const idEdicao = document.getElementById('modIdTarefaEdicao').value.trim();
+    const titulo = document.getElementById('modTituloTarefa').value.trim();
+    if (!titulo) return alert('Digite o título da tarefa!');
+
+    const idObj = document.getElementById('modObjetivoTarefa').value;
+    const idPrj = document.getElementById('modProjetoTarefa').value;
+    const prj = STATE.projetos.find(p => p.ID_Projeto === idPrj) || {};
+    const obj = STATE.objetivos.find(o => o.ID_Objetivo === (idObj || prj.ID_Objetivo)) || {};
+    const idFinal = idEdicao || gerarIdLocal('ATV');
+
+    const payload = {
+      idTarefa: idFinal,
+      titulo,
+      idProjeto: idPrj || '',
+      idObjetivo: idObj || prj.ID_Objetivo || '',
+      idTime: prj.ID_Time || obj.ID_Time || (STATE.times[0] ? STATE.times[0].ID_Time : ''),
+      responsavel: document.getElementById('modRespTarefa').value,
+      dataInicio: document.getElementById('modInicioTarefa').value,
+      dataPrazo: document.getElementById('modPrazoTarefa').value,
+      prioridade: document.getElementById('modPrioTarefa').value,
+      dependeDe: document.getElementById('modDepTarefa').value,
+      tipoVisibilidade: document.getElementById('modVisibilidadeTarefa').value,
+      usuariosPermitidos: document.getElementById('modUsuariosPermitidos').value
+    };
+
+    fecharModalNovaTarefa();
+
+    if (idEdicao) {
+      aplicarMutacaoLocalESincronizar(
+        () => {
+          const item = STATE.tarefas.find(x => String(x.ID_Tarefa) === String(idEdicao));
+          if (item) {
+            item.Titulo_Tarefa = payload.titulo;
+            item.ID_Projeto = payload.idProjeto;
+            item.ID_Objetivo = payload.idObjetivo;
+            item.ID_Time = payload.idTime;
+            item.Responsavel = payload.responsavel;
+            item.Data_Inicio = payload.dataInicio;
+            item.Data_Prazo = payload.dataPrazo;
+            item.Prioridade = payload.prioridade;
+            item.ID_Tarefa_Predecessora = payload.dependeDe;
+            item.Tipo_Visibilidade = payload.tipoVisibilidade;
+            item.Usuarios_Permitidos = payload.usuariosPermitidos;
+          }
+        },
+        runner => runner.apiSalvarEdicaoTarefa(payload),
+        'Editar ' + idEdicao
+      );
+    } else {
+      aplicarMutacaoLocalESincronizar(
+        () => {
+          STATE.tarefas.push({
+            ID_Tarefa: payload.idTarefa,
+            Titulo_Tarefa: payload.titulo,
+            ID_Projeto: payload.idProjeto,
+            ID_Objetivo: payload.idObjetivo,
+            ID_Time: payload.idTime,
+            Tipo_Demanda: 'Entrega de Projeto',
+            Responsavel: payload.responsavel,
+            Status: 'A Fazer',
+            Prioridade: payload.prioridade,
+            Data_Inicio: payload.dataInicio,
+            Data_Prazo: payload.dataPrazo,
+            ID_Tarefa_Predecessora: payload.dependeDe,
+            Tipo_Visibilidade: payload.tipoVisibilidade,
+            Usuarios_Permitidos: payload.usuariosPermitidos,
+            Atualizado_Em: new Date().toISOString()
+          });
+        },
+        runner => runner.apiCriarTarefa(payload),
+        'Nova Tarefa ' + idFinal
+      );
     }
   }
 
-  function renderizarRotinas() {
-    const grid = document.getElementById('gridCardsRotinas');
-    if (!grid) return;
-    grid.innerHTML = '';
+  function excluirTarefaPeloModal() {
+    const idEdicao = document.getElementById('modIdTarefaEdicao').value.trim();
+    if (!idEdicao) return;
+    if (!confirm(`Tem certeza que deseja excluir a tarefa [${idEdicao}]?`)) return;
+    fecharModalNovaTarefa();
 
-    STATE.rotinas.forEach(r => {
-      const lista = r.checklist || [];
-      const card = document.createElement('div');
-      card.className = 'panel-box';
-      card.style.display = 'block';
-      card.innerHTML = `
-        <div style="display:flex;justify-content:space-between;">
-          <span class="badge" style="background:#e0e7ff;color:#1d4ed8;">🔁 ${r.Frequencia}</span>
-          <span class="badge" style="background:${r.Status_Ciclo === 'Feito no Ciclo' ? '#dcfce7' : '#fef3c7'};">${r.Status_Ciclo}</span>
-        </div>
-        <h4 style="margin:8px 0;">${r.Titulo_Rotina}</h4>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">👤 ${r.Responsavel} · 📅 Próxima: ${r.Proxima_Execucao}</div>
-        <div style="margin-bottom:8px;">
-          ${lista.map((item, idx) => `
-            <label style="display:block;font-size:12px;margin-bottom:4px;">
-              <input type="checkbox" ${item.feito ? 'checked' : ''} onchange="alternarCheckRotina('${r.ID_Rotina}', ${idx})"> ${item.texto}
-            </label>
-          `).join('')}
-        </div>
-        <textarea id="descRot-${r.ID_Rotina}" placeholder="Informe a descrição desta atualização..." style="width:100%;height:50px;margin-bottom:6px;padding:6px;font-size:12px;"></textarea>
-        <button class="btn-primario" style="width:100%;" onclick="concluirCicloRotinaUI('${r.ID_Rotina}')">✅ Registrar Atualização & Avançar Ciclo</button>
-      `;
-      grid.appendChild(card);
+    aplicarMutacaoLocalESincronizar(
+      () => { STATE.tarefas = STATE.tarefas.filter(t => String(t.ID_Tarefa) !== String(idEdicao)); },
+      runner => runner.apiExcluirItem('TAREFA', idEdicao),
+      'Excluir ' + idEdicao
+    );
+  }
+
+  function excluirRotinaUI(idRotina) {
+    if (!confirm(`Deseja excluir a rotina [${idRotina}]?`)) return;
+    aplicarMutacaoLocalESincronizar(
+      () => { STATE.rotinas = STATE.rotinas.filter(r => String(r.ID_Rotina) !== String(idRotina)); },
+      runner => runner.apiExcluirItem('ROTINA', idRotina),
+      'Excluir ' + idRotina
+    );
+  }
+
+  function mudarHorizonteRotinas(novoHorizonte) {
+    STATE.horizonteRotinas = novoHorizonte;
+    ['HOJE', 'SEMANA', 'MES', 'TODAS'].forEach(h => {
+      const btn = document.getElementById('btnHorizonte-' + h);
+      if (btn) {
+        const ativo = h === novoHorizonte;
+        btn.classList.toggle('active', ativo);
+        btn.style.background = ativo ? '#2563eb' : 'transparent';
+        btn.style.color = ativo ? '#ffffff' : 'var(--muted)';
+      }
     });
+    renderizarRotinas();
+  }
+
+  function formatarCabecalhoDiaSemana(dataISO) {
+    if (!dataISO) return 'Sem Data Definida';
+    const partes = dataISO.split('-');
+    if (partes.length !== 3) return dataISO;
+    const dt = new Date(Number(partes[0]), Number(partes[1]) - 1, Number(partes[2]));
+    const nomesDias = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+    return `📅 ${nomesDias[dt.getDay()]} — ${partes[2]}/${partes[1]}/${partes[0]}`;
+  }
+
+  function obterGrupoSemanaDoMes(dataISO) {
+    if (!dataISO) return 'Sem Data Definida';
+    const partes = dataISO.split('-');
+    if (partes.length !== 3) return dataISO;
+    const dia = Number(partes[2]);
+    const numSemana = Math.ceil(dia / 7);
+    const inicioFaixa = (numSemana - 1) * 7 + 1;
+    const fimFaixa = Math.min(31, numSemana * 7);
+    return `📆 Semana ${numSemana} do Mês (Dias ${String(inicioFaixa).padStart(2, '0')} a ${String(fimFaixa).padStart(2, '0')}/${partes[1]})`;
+  }
+
+  function renderizarRotinas() {
+    const cont = document.getElementById('containerListaRotinasAgrupadas');
+    if (!cont) return;
+    cont.innerHTML = '';
+
+    const hoje = new Date().toISOString().slice(0, 10);
+    const dtHoje = new Date(hoje + 'T00:00:00');
+    const dtFimSemana = new Date(dtHoje);
+    dtFimSemana.setDate(dtFimSemana.getDate() + 7);
+    const fimSemanaISO = dtFimSemana.toISOString().slice(0, 10);
+    const mesAtualPrefix = hoje.slice(0, 7);
+
+    const rotinasFiltradas = STATE.rotinas
+      .filter(itemVisivelParaSimulador)
+      .filter(r => !STATE.modoMinhasAtividades || pertenceAoUsuarioGoogleLogado(r))
+      .filter(r => {
+        const dt = r.Proxima_Execucao || hoje;
+        if (STATE.horizonteRotinas === 'HOJE') return dt <= hoje;
+        if (STATE.horizonteRotinas === 'SEMANA') return dt >= hoje && dt <= fimSemanaISO;
+        if (STATE.horizonteRotinas === 'MES') return dt.startsWith(mesAtualPrefix);
+        return true;
+      })
+      .sort((a, b) => String(a.Proxima_Execucao || '').localeCompare(String(b.Proxima_Execucao || '')));
+
+    if (rotinasFiltradas.length === 0) {
+      cont.innerHTML = `
+        <div class="panel-box" style="justify-content:center;padding:28px;color:var(--muted);">
+          🎉 Nenhuma rotina programada para este filtro (${STATE.horizonteRotinas}). Use os botões acima para ver da Semana ou do Mês!
+        </div>
+      `;
+    } else {
+      const grupos = {};
+      rotinasFiltradas.forEach(r => {
+        let chaveGrupo = '⚡ Rotinas de Hoje & Pendentes';
+        if (STATE.horizonteRotinas === 'SEMANA' || STATE.horizonteRotinas === 'TODAS') {
+          chaveGrupo = formatarCabecalhoDiaSemana(r.Proxima_Execucao);
+        } else if (STATE.horizonteRotinas === 'MES') {
+          chaveGrupo = obterGrupoSemanaDoMes(r.Proxima_Execucao);
+        }
+        if (!grupos[chaveGrupo]) grupos[chaveGrupo] = [];
+        grupos[chaveGrupo].push(r);
+      });
+
+      Object.keys(grupos).forEach(nomeGrupo => {
+        const boxGrupo = document.createElement('div');
+        boxGrupo.className = 'panel-box';
+        boxGrupo.style.display = 'block';
+        boxGrupo.innerHTML = `
+          <div style="font-weight:800;font-size:13.5px;color:var(--primary);margin-bottom:10px;border-bottom:1px solid var(--border);padding-bottom:6px;">
+            ${esc(nomeGrupo)} (${grupos[nomeGrupo].length})
+          </div>
+          <div class="lista-linhas-rotinas"></div>
+        `;
+        const listaContainer = boxGrupo.querySelector('.lista-linhas-rotinas');
+
+        grupos[nomeGrupo].forEach(r => {
+          const timeObj = STATE.times.find(tm => tm.ID_Time === r.ID_Time) || { Sigla: 'ÁREA', Cor_Hex: '#2563eb' };
+          const podeOperar = usuarioPodeDarCheckNaRotina(r);
+          const st = r.Status_Ciclo || 'Pendente';
+
+          let textoBotao = '⬜ 1º Clique: Dar Check';
+          let corBotao = '#2563eb';
+          if (st === 'Check') {
+            textoBotao = '☑️ Check OK! (2º Clique: Finalizar ✅)';
+            corBotao = '#d97706';
+          } else if (st === 'Finalizada') {
+            textoBotao = '✅ Finalizada';
+            corBotao = '#16a34a';
+          }
+
+          const detalhesHover = `📋 DETALHES DA ROTINA [${r.ID_Rotina}]\n` +
+            `• Orientações: ${r.Checklist_Amigavel || 'Sem detalhes adicionais'}\n` +
+            `• Frequência: ${r.Frequencia} | Data: ${r.Proxima_Execucao}\n` +
+            `• Responsável: ${r.Responsavel}\n` +
+            `• Última Execução: ${r.Ultima_Execucao || '-'}`;
+
+          const linha = document.createElement('div');
+          linha.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:#f8fafc;flex-wrap:wrap;';
+          linha.setAttribute('title', detalhesHover);
+
+          linha.innerHTML = `
+            <div style="flex:2;min-width:240px;cursor:help;">
+              <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+                <span class="badge" style="background:${corSegura(timeObj.Cor_Hex)};color:#fff;">${esc(timeObj.Sigla)}</span>
+                <span class="badge" style="background:#e0e7ff;color:#1d4ed8;">${esc(r.Frequencia)}</span>
+                <span style="font-size:11px;color:var(--muted);">📅 ${esc(r.Proxima_Execucao)} · 👤 <strong>${esc(r.Responsavel)}</strong></span>
+              </div>
+              <div style="font-weight:700;font-size:13.5px;color:var(--text);">
+                ${esc(r.Titulo_Rotina)} <span style="font-size:11px;color:var(--primary);font-weight:600;">(🔍 Passe o mouse p/ detalhes)</span>
+              </div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px;">
+                ℹ️ ${esc(r.Checklist_Amigavel || '')}
+              </div>
+            </div>
+
+            <div style="flex:1.5;min-width:210px;">
+              <input type="text" id="obsRapida-${esc(r.ID_Rotina)}" value="${esc(r.Ultima_Descricao || '')}"
+                placeholder="💬 Observação rápida..."
+                ${!podeOperar ? 'disabled' : ''}
+                onchange="salvarObsRapidaUI('${escJs(r.ID_Rotina)}', this.value)"
+                style="width:100%;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;background:${podeOperar ? '#fff' : '#f1f5f9'};">
+            </div>
+
+            <div style="display:flex;gap:6px;align-items:center;">
+              <button class="btn-primario"
+                style="background:${podeOperar ? corBotao : '#94a3b8'};cursor:${podeOperar ? 'pointer' : 'not-allowed'};min-width:210px;"
+                ${!podeOperar ? 'disabled title="Apenas o responsável, Gestor ou Admin pode dar check nesta rotina"' : ''}
+                onclick="clicarBotaoRotinaUI('${escJs(r.ID_Rotina)}')">
+                ${podeOperar ? textoBotao : '🔒 Só Responsável / Gestor'}
+              </button>
+              ${podeOperar ? `<button class="btn-arrow" title="Excluir Rotina" onclick="excluirRotinaUI('${escJs(r.ID_Rotina)}')">🗑️</button>` : ''}
+            </div>
+          `;
+          listaContainer.appendChild(linha);
+        });
+
+        cont.appendChild(boxGrupo);
+      });
+    }
 
     const tbody = document.getElementById('tbodyHistoricoRotinas');
     if (tbody) {
       tbody.innerHTML = STATE.historicoRotinas.map(h => `
-        <tr><td>${h.Data_Hora_Registro}</td><td><strong>${h.Titulo_Rotina}</strong></td><td>${h.Responsavel}</td><td>${h.Descricao_Informada}</td><td>${h.Resumo_Checklist}</td></tr>
+        <tr>
+          <td>${esc(h.Data_Hora_Registro)}</td>
+          <td><strong>[${esc(h.ID_Rotina)}] ${esc(h.Titulo_Rotina)}</strong></td>
+          <td>${esc(h.Responsavel)}</td>
+          <td>${esc(h.Descricao_Informada)}</td>
+          <td><span class="badge" style="background:#dcfce7;color:#15803d;">${esc(h.Resumo_Checklist)}</span></td>
+        </tr>
       `).join('');
     }
   }
 
-  function alternarCheckRotina(idRotina, idx) {
+  function salvarObsRapidaUI(idRotina, textoObs) {
     const r = STATE.rotinas.find(x => x.ID_Rotina === idRotina);
-    if (r && r.checklist && r.checklist[idx]) {
-      r.checklist[idx].feito = !r.checklist[idx].feito;
-    }
+    if (!r) return;
+    aplicarMutacaoLocalESincronizar(
+      () => { r.Ultima_Descricao = textoObs; },
+      runner => runner.apiSalvarObservacaoRotina(idRotina, textoObs),
+      'Obs ' + idRotina
+    );
   }
 
-  function concluirCicloRotinaUI(idRotina) {
-    const desc = document.getElementById('descRot-' + idRotina).value.trim();
-    if (!desc) { alert('Informe uma breve descrição da atualização antes de concluir a rotina!'); return; }
+  function clicarBotaoRotinaUI(idRotina) {
     const r = STATE.rotinas.find(x => x.ID_Rotina === idRotina);
-    if (typeof google !== 'undefined' && google.script && google.script.run) {
-      google.script.run.withSuccessHandler(salvarCacheNavegador).apiRegistrarCicloRotina(idRotina, r.checklist || [], desc);
+    if (!r) return;
+    if (!usuarioPodeDarCheckNaRotina(r)) {
+      return alert('🔒 Apenas o próprio responsável pela rotina, um Gestor ou Admin pode dar check ou finalizar!');
     }
+
+    const inputObs = document.getElementById('obsRapida-' + idRotina);
+    const obsTexto = inputObs && inputObs.value.trim() !== ''
+      ? inputObs.value.trim()
+      : (r.Ultima_Descricao || 'Verificado sem observações.');
+    const membroAtivo = obterMembroGoogleAtivo();
+    const quemClicou = membroAtivo ? membroAtivo.Nome_Exibicao : (STATE.usuarioEmail || 'Gestor');
+    const agoraStr = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const idLogNovo = gerarIdLocal('LOG');
+
+    const eraCheck = (r.Status_Ciclo === 'Check');
+    const proxData = (!eraCheck || r.Frequencia === 'Pontual')
+      ? r.Proxima_Execucao
+      : calcularProximaDataLocal(r.Proxima_Execucao, r.Frequencia);
+
+    const payload = {
+      idRotina,
+      observacaoRapida: obsTexto,
+      usuarioAcao: quemClicou,
+      dataHora: agoraStr,
+      idLog: idLogNovo,
+      novoStatus: eraCheck ? 'Finalizada' : 'Check',
+      proximaData: proxData
+    };
+
+    aplicarMutacaoLocalESincronizar(
+      () => {
+        if (!eraCheck) {
+          r.Status_Ciclo = 'Check';
+          r.Ultima_Descricao = obsTexto;
+          r.Ultima_Execucao = agoraStr;
+        } else {
+          STATE.historicoRotinas.unshift({
+            ID_Log: idLogNovo,
+            ID_Rotina: r.ID_Rotina,
+            Titulo_Rotina: r.Titulo_Rotina,
+            Responsavel: `${r.Responsavel} (por ${quemClicou})`,
+            Data_Hora_Registro: agoraStr,
+            Descricao_Informada: obsTexto,
+            Resumo_Checklist: `Finalizada (${r.Frequencia})`
+          });
+          if (r.Frequencia === 'Pontual') {
+            r.Status_Ciclo = 'Finalizada';
+            r.Ultima_Descricao = obsTexto;
+            r.Ultima_Execucao = agoraStr;
+          } else {
+            r.Status_Ciclo = 'Pendente';
+            r.Proxima_Execucao = proxData;
+            r.Ultima_Descricao = `[Concluída em ${agoraStr}] ${obsTexto}`;
+            r.Ultima_Execucao = agoraStr;
+          }
+        }
+      },
+      runner => runner.apiAvancarCliqueRotina(payload),
+      eraCheck ? 'Finalizar ' + idRotina : 'Check ' + idRotina
+    );
+  }
+
+  function sugerirPassosChecklistIA() {
+    const titulo = (document.getElementById('rotTitulo').value || '').toLowerCase();
+    let sugestao = 'Verificar indicadores principais, validar pendências e registrar observação rápida.';
+    if (titulo.includes('data') || titulo.includes('pipeline') || titulo.includes('dados')) {
+      sugestao = 'Conferir logs de ingestão da madrugada, validar volumetria nas tabelas e notificar disponibilidade.';
+    } else if (titulo.includes('ia') || titulo.includes('ai') || titulo.includes('modelo')) {
+      sugestao = 'Avaliar precisão dos prompts, checar tempo de resposta e revisar feedbacks dos usuários.';
+    }
+    document.getElementById('rotPassos').value = sugestao;
   }
 
   function salvarNovaRotinaUI() {
     const titulo = document.getElementById('rotTitulo').value.trim();
     if (!titulo) return alert('Informe o título da rotina!');
-    const passos = document.getElementById('rotPassos').value.split(',').map(s => s.trim()).filter(Boolean);
+    const idNovaRot = gerarIdLocal('ROT');
     const payload = {
+      idRotina: idNovaRot,
       titulo,
       idTime: document.getElementById('rotTime').value,
       responsavel: document.getElementById('rotResponsavel').value,
       frequencia: document.getElementById('rotFrequencia').value,
-      proximaData: document.getElementById('rotData').value,
-      passos: passos.length ? passos : ['Executar verificação', 'Registrar evidência']
+      dataInicio: document.getElementById('rotData').value,
+      detalhes: document.getElementById('rotPassos').value.trim() || 'Executar verificação padrão.'
     };
     document.getElementById('rotTitulo').value = '';
-    if (typeof google !== 'undefined' && google.script && google.script.run) {
-      google.script.run.withSuccessHandler(salvarCacheNavegador).apiCriarRotina(payload);
-    }
+    document.getElementById('rotPassos').value = '';
+
+    aplicarMutacaoLocalESincronizar(
+      () => {
+        STATE.rotinas.push({
+          ID_Rotina: payload.idRotina,
+          Titulo_Rotina: payload.titulo,
+          ID_Time: payload.idTime,
+          Responsavel: payload.responsavel,
+          Frequencia: payload.frequencia,
+          Proxima_Execucao: payload.dataInicio,
+          Status_Ciclo: 'Pendente',
+          Checklist_Amigavel: payload.detalhes,
+          Ultima_Descricao: '',
+          Ultima_Execucao: '-',
+          Tipo_Visibilidade: 'PUBLICO',
+          Usuarios_Permitidos: ''
+        });
+      },
+      runner => runner.apiCriarRotina(payload),
+      'Nova Rotina ' + idNovaRot
+    );
   }
 
+  /* ==========================================================================
+     CRUD COMPLETO DE OBJETIVOS ESTRATÉGICOS E PROJETOS / INICIATIVAS
+     ========================================================================== */
   function renderizarHierarquia() {
     const cont = document.getElementById('containerArvoreObjetivos');
     if (!cont) return;
-    cont.innerHTML = STATE.objetivos.map(o => {
+    cont.innerHTML = STATE.objetivos.filter(itemVisivelParaSimulador).map(o => {
+      const timeObj = STATE.times.find(tm => tm.ID_Time === o.ID_Time) || { Sigla: 'ÁREA', Cor_Hex: '#2563eb' };
       const projs = STATE.projetos.filter(p => p.ID_Objetivo === o.ID_Objetivo);
+      const tarefasObj = STATE.tarefas.filter(t => t.ID_Objetivo === o.ID_Objetivo);
+      const feitasObj = tarefasObj.filter(t => t.Status === 'Concluído').length;
+      const pctObj = tarefasObj.length ? Math.round((feitasObj / tarefasObj.length) * 100) : 0;
+
       return `
         <div class="panel-box" style="display:block;">
-          <strong>🎯 ${o.Titulo_Objetivo}</strong> <span style="color:var(--muted);font-size:12px;">(Meta: ${o.Meta_Indicador})</span>
-          <ul style="margin:8px 0 0 18px;font-size:12px;">
-            ${projs.map(p => `<li>📁 <strong>${p.Nome_Projeto}</strong> — Líder: ${p.Lider}</li>`).join('')}
-          </ul>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:8px;">
+            <div>
+              <span class="badge" style="background:${corSegura(timeObj.Cor_Hex)};color:#fff;">${esc(timeObj.Sigla)}</span>
+              <strong style="font-size:15px;margin-left:6px;">🎯 [${esc(o.ID_Objetivo)}] ${esc(o.Titulo_Objetivo)}</strong>
+              <span style="color:var(--muted);font-size:12px;margin-left:8px;">Meta: <strong>${esc(o.Meta_Indicador || '-')}</strong> · 👁️ ${esc(o.Tipo_Visibilidade || 'PUBLICO')}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <strong>${pctObj}% (${feitasObj}/${tarefasObj.length} tarefas)</strong>
+              <button class="btn-arrow" title="Editar Objetivo" onclick="prepararEdicaoObjetivo('${escJs(o.ID_Objetivo)}')">✏️ Editar</button>
+              <button class="btn-arrow" style="color:#dc2626;" title="Excluir Objetivo" onclick="excluirObjetivoUI('${escJs(o.ID_Objetivo)}')">🗑️</button>
+            </div>
+          </div>
+          <div class="progress-track"><div class="progress-fill" style="width:${pctObj}%"></div></div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px;margin-top:12px;">
+            ${projs.map(p => {
+              const tPrj = STATE.tarefas.filter(t => t.ID_Projeto === p.ID_Projeto);
+              const fPrj = tPrj.filter(t => t.Status === 'Concluído').length;
+              const pctPrj = tPrj.length ? Math.round((fPrj / tPrj.length) * 100) : 0;
+              return `
+                <div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px;">
+                  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">
+                    <div style="font-weight:700;font-size:13px;">📁 [${esc(p.ID_Projeto)}] ${esc(p.Nome_Projeto)}</div>
+                    <div style="display:flex;gap:4px;">
+                      <button class="btn-arrow" title="Editar Projeto" onclick="prepararEdicaoProjeto('${escJs(p.ID_Projeto)}')">✏️</button>
+                      <button class="btn-arrow" style="color:#dc2626;" title="Excluir Projeto" onclick="excluirProjetoUI('${escJs(p.ID_Projeto)}')">🗑️</button>
+                    </div>
+                  </div>
+                  <div style="font-size:11.5px;color:var(--muted);margin:6px 0;">
+                    👤 Líder: <strong>${esc(p.Lider || '-')}</strong> · 👁️ ${esc(p.Tipo_Visibilidade || 'PUBLICO')} · Entregas: ${fPrj}/${tPrj.length} (${pctPrj}%)
+                  </div>
+                  <div class="progress-track"><div class="progress-fill" style="width:${pctPrj}%"></div></div>
+                </div>
+              `;
+            }).join('') || '<div style="color:var(--muted);font-size:12px;">Nenhum projeto vinculado a este objetivo ainda.</div>'}
+          </div>
         </div>
       `;
     }).join('');
   }
 
+  function prepararEdicaoObjetivo(idObjetivo) {
+    const obj = STATE.objetivos.find(o => o.ID_Objetivo === idObjetivo);
+    if (!obj) return;
+    document.getElementById('tituloFormObjetivo').innerText = `✏️ Editando Objetivo Estratégico [${obj.ID_Objetivo}]`;
+    document.getElementById('editObjId').value = obj.ID_Objetivo;
+    document.getElementById('novoObjTime').value = obj.ID_Time || '';
+    document.getElementById('novoObjTitulo').value = obj.Titulo_Objetivo || '';
+    document.getElementById('novoObjMeta').value = obj.Meta_Indicador || '';
+    if (document.getElementById('novoObjVisibilidade')) {
+      document.getElementById('novoObjVisibilidade').value = obj.Tipo_Visibilidade || 'PUBLICO';
+    }
+    document.getElementById('btnCancelarObjetivo').classList.remove('hidden');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function limparFormObjetivo() {
+    document.getElementById('tituloFormObjetivo').innerText = '🎯 Cadastrar Novo Objetivo Estratégico';
+    document.getElementById('editObjId').value = '';
+    document.getElementById('novoObjTitulo').value = '';
+    document.getElementById('novoObjMeta').value = '';
+    document.getElementById('btnCancelarObjetivo').classList.add('hidden');
+  }
+
+  function criarOuEditarObjetivoUI() {
+    const idEdicao = document.getElementById('editObjId').value.trim();
+    const titulo = document.getElementById('novoObjTitulo').value.trim();
+    if (!titulo) return alert('Informe o título do Objetivo!');
+    const idTime = document.getElementById('novoObjTime').value;
+    const meta = document.getElementById('novoObjMeta').value.trim();
+    const visibilidade = document.getElementById('novoObjVisibilidade') ? document.getElementById('novoObjVisibilidade').value : 'PUBLICO';
+    const idGerado = idEdicao || gerarIdLocal('OBJ');
+
+    limparFormObjetivo();
+
+    aplicarMutacaoLocalESincronizar(
+      () => {
+        if (idEdicao) {
+          const item = STATE.objetivos.find(o => o.ID_Objetivo === idEdicao);
+          if (item) {
+            item.ID_Time = idTime;
+            item.Titulo_Objetivo = titulo;
+            item.Meta_Indicador = meta;
+            item.Tipo_Visibilidade = visibilidade;
+          }
+        } else {
+          STATE.objetivos.push({
+            ID_Objetivo: idGerado,
+            ID_Time: idTime,
+            Titulo_Objetivo: titulo,
+            Meta_Indicador: meta,
+            Tipo_Visibilidade: visibilidade,
+            Usuarios_Permitidos: ''
+          });
+        }
+      },
+      runner => runner.apiCriarItemEstrutura('OBJETIVO', { idObjetivoEdicao: idEdicao, idGerado, idTime, titulo, meta, visibilidade }),
+      idEdicao ? 'Editar Objetivo' : 'Novo Objetivo'
+    );
+  }
+
+  function excluirObjetivoUI(idObjetivo) {
+    if (!confirm(`Deseja realmente excluir o Objetivo [${idObjetivo}]?`)) return;
+    aplicarMutacaoLocalESincronizar(
+      () => { STATE.objetivos = STATE.objetivos.filter(o => o.ID_Objetivo !== idObjetivo); },
+      runner => runner.apiExcluirItem('OBJETIVO', idObjetivo),
+      'Excluir Objetivo'
+    );
+  }
+
+  function prepararEdicaoProjeto(idProjeto) {
+    const prj = STATE.projetos.find(p => p.ID_Projeto === idProjeto);
+    if (!prj) return;
+    document.getElementById('tituloFormProjeto').innerText = `✏️ Editando Projeto / Iniciativa [${prj.ID_Projeto}]`;
+    document.getElementById('editPrjId').value = prj.ID_Projeto;
+    document.getElementById('novoPrjNome').value = prj.Nome_Projeto || '';
+    document.getElementById('novoPrjObj').value = prj.ID_Objetivo || '';
+    document.getElementById('novoPrjLider').value = prj.Lider || '';
+    if (document.getElementById('novoPrjVisibilidade')) {
+      document.getElementById('novoPrjVisibilidade').value = prj.Tipo_Visibilidade || 'PUBLICO';
+    }
+    document.getElementById('btnCancelarProjeto').classList.remove('hidden');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function limparFormProjeto() {
+    document.getElementById('tituloFormProjeto').innerText = '📁 Cadastrar Novo Projeto / Iniciativa';
+    document.getElementById('editPrjId').value = '';
+    document.getElementById('novoPrjNome').value = '';
+    document.getElementById('btnCancelarProjeto').classList.add('hidden');
+  }
+
+  function criarOuEditarProjetoUI() {
+    const idEdicao = document.getElementById('editPrjId').value.trim();
+    const nome = document.getElementById('novoPrjNome').value.trim();
+    if (!nome) return alert('Informe o nome do Projeto / Iniciativa!');
+    const idObj = document.getElementById('novoPrjObj').value;
+    if (!idObj) return alert('Selecione a qual Objetivo este Projeto está vinculado!');
+    const obj = STATE.objetivos.find(o => o.ID_Objetivo === idObj) || {};
+    const idTime = obj.ID_Time || (STATE.times[0] ? STATE.times[0].ID_Time : '');
+    const lider = document.getElementById('novoPrjLider').value;
+    const visibilidade = document.getElementById('novoPrjVisibilidade') ? document.getElementById('novoPrjVisibilidade').value : 'PUBLICO';
+    const idGerado = idEdicao || gerarIdLocal('PRJ');
+
+    limparFormProjeto();
+
+    aplicarMutacaoLocalESincronizar(
+      () => {
+        if (idEdicao) {
+          const item = STATE.projetos.find(p => p.ID_Projeto === idEdicao);
+          if (item) {
+            item.Nome_Projeto = nome;
+            item.ID_Objetivo = idObj;
+            item.ID_Time = idTime;
+            item.Lider = lider;
+            item.Tipo_Visibilidade = visibilidade;
+          }
+        } else {
+          STATE.projetos.push({
+            ID_Projeto: idGerado,
+            Nome_Projeto: nome,
+            ID_Objetivo: idObj,
+            ID_Time: idTime,
+            Lider: lider,
+            Tipo_Visibilidade: visibilidade,
+            Usuarios_Permitidos: ''
+          });
+        }
+      },
+      runner => runner.apiCriarItemEstrutura('PROJETO', { idProjetoEdicao: idEdicao, idGerado, nome, idObjetivo: idObj, idTime, lider, visibilidade }),
+      idEdicao ? 'Editar Projeto' : 'Novo Projeto'
+    );
+  }
+
+  function excluirProjetoUI(idProjeto) {
+    if (!confirm(`Deseja realmente excluir o Projeto [${idProjeto}]?`)) return;
+    aplicarMutacaoLocalESincronizar(
+      () => { STATE.projetos = STATE.projetos.filter(p => p.ID_Projeto !== idProjeto); },
+      runner => runner.apiExcluirItem('PROJETO', idProjeto),
+      'Excluir Projeto'
+    );
+  }
+
   function renderizarRelatorios() {
+    const hoje = new Date().toISOString().slice(0, 10);
+    const totalTarefas = STATE.tarefas.length;
+    const concluidas = STATE.tarefas.filter(t => t.Status === 'Concluído').length;
+    const pctGeral = totalTarefas ? Math.round((concluidas / totalTarefas) * 100) : 0;
+    const comDepBloq = STATE.tarefas.filter(t => {
+      if (!t.ID_Tarefa_Predecessora || t.Status === 'Concluído') return false;
+      const pred = STATE.tarefas.find(p => p.ID_Tarefa === t.ID_Tarefa_Predecessora);
+      return pred && pred.Status !== 'Concluído';
+    }).length;
+    const futuras = STATE.tarefas.filter(t => t.Data_Inicio && t.Data_Inicio > hoje).length;
+    const rotinasCheck = STATE.rotinas.filter(r => r.Status_Ciclo === 'Check' || r.Status_Ciclo === 'Finalizada').length;
+
+    const kpiGrid = document.getElementById('gridKpisRelatorio');
+    if (kpiGrid) {
+      kpiGrid.innerHTML = `
+        <div class="kpi-card"><div class="kpi-label">Taxa de Entrega Geral</div><div class="kpi-value" style="color:var(--primary);">${pctGeral}%</div><div class="kpi-sub">${concluidas} de ${totalTarefas} tarefas concluídas</div></div>
+        <div class="kpi-card"><div class="kpi-label">Rotinas c/ Check ou Finalizadas</div><div class="kpi-value" style="color:var(--success);">${rotinasCheck}/${STATE.rotinas.length}</div><div class="kpi-sub">${STATE.historicoRotinas.length} execuções no histórico</div></div>
+        <div class="kpi-card"><div class="kpi-label">Aguardando Dependência</div><div class="kpi-value" style="color:var(--danger);">${comDepBloq}</div><div class="kpi-sub">Tarefas travadas por predecessoras</div></div>
+        <div class="kpi-card"><div class="kpi-label">Agendadas p/ Data Futura</div><div class="kpi-value" style="color:var(--purple);">${futuras}</div><div class="kpi-sub">Atividades planejadas adiante</div></div>
+      `;
+    }
+
     const tbRot = document.getElementById('tbodyRelRotinas');
     if (tbRot) {
       tbRot.innerHTML = STATE.rotinas.map(r => `
-        <tr><td><strong>${r.Titulo_Rotina}</strong></td><td>${r.Frequencia}</td><td>${r.Responsavel}</td><td>${(r.checklist||[]).length} passos</td><td>${r.Status_Ciclo}</td><td>${r.Ultima_Descricao}</td></tr>
+        <tr>
+          <td><strong>[${esc(r.ID_Rotina)}] ${esc(r.Titulo_Rotina)}</strong></td>
+          <td>${esc(r.Frequencia)} (Data: ${esc(r.Proxima_Execucao)})</td>
+          <td>${esc(r.Responsavel)}</td>
+          <td>${esc(r.Checklist_Amigavel || '-')}</td>
+          <td><span class="badge" style="background:${r.Status_Ciclo === 'Pendente' ? '#fef3c7' : '#dcfce7'};">${esc(r.Status_Ciclo)}</span></td>
+          <td>${esc(r.Ultima_Descricao || '-')}</td>
+        </tr>
       `).join('');
     }
+
     const tbObj = document.getElementById('tbodyRelObjetivos');
     if (tbObj) {
       tbObj.innerHTML = STATE.objetivos.map(o => {
         const t = STATE.tarefas.filter(x => x.ID_Objetivo === o.ID_Objetivo);
         const feitas = t.filter(x => x.Status === 'Concluído').length;
         const pct = t.length ? Math.round((feitas / t.length) * 100) : 0;
-        return `<tr><td><strong>${o.Titulo_Objetivo}</strong></td><td>${feitas}/${t.length}</td><td><strong>${pct}%</strong></td></tr>`;
+        return `<tr><td><strong>${esc(o.Titulo_Objetivo)}</strong></td><td>${esc(o.Meta_Indicador)}</td><td>${feitas}/${t.length}</td><td><div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div><strong>${pct}%</strong></td></tr>`;
       }).join('');
     }
+
+    const tbPrj = document.getElementById('tbodyRelProjetos');
+    if (tbPrj) {
+      tbPrj.innerHTML = STATE.projetos.map(p => {
+        const t = STATE.tarefas.filter(x => x.ID_Projeto === p.ID_Projeto);
+        const feitas = t.filter(x => x.Status === 'Concluído').length;
+        const bloq = t.filter(x => x.Status === 'Bloqueado' || x.ID_Tarefa_Predecessora).length;
+        const pct = t.length ? Math.round((feitas / t.length) * 100) : 0;
+        return `<tr><td><strong>${esc(p.Nome_Projeto)}</strong><br><small>Líder: ${esc(p.Lider)}</small></td><td>${bloq}</td><td>${feitas}/${t.length}</td><td><div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div><strong>${pct}%</strong></td></tr>`;
+      }).join('');
+    }
+
     const tbInd = document.getElementById('tbodyRelIndividuos');
     if (tbInd) {
       tbInd.innerHTML = STATE.membros.map(m => {
@@ -304,73 +1433,153 @@
         const feitas = t.filter(x => x.Status === 'Concluído').length;
         const rots = STATE.rotinas.filter(r => r.Responsavel === m.Nome_Exibicao).length;
         const pct = t.length ? Math.round((feitas / t.length) * 100) : 0;
-        return `<tr><td><strong>${m.Nome_Exibicao}</strong></td><td>${t.length - feitas}</td><td>${rots}</td><td><strong>${pct}%</strong></td></tr>`;
+        return `<tr><td><strong>${esc(m.Nome_Exibicao)}</strong><br><small style="color:var(--muted);">${esc(m.Email_Google || '')}</small></td><td>${esc(m.ID_Time_Principal)}</td><td>${t.length - feitas} abertas</td><td>${rots} rotinas</td><td><div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div><strong>${pct}%</strong> (${feitas}/${t.length})</td></tr>`;
       }).join('');
     }
   }
 
   function renderizarConfig() {
-    const div = document.getElementById('listaTimesConfig');
-    if (div) {
-      div.innerHTML = STATE.times.map(t => `<span class="badge" style="background:${t.Cor_Hex};color:#fff;margin-right:8px;padding:6px 10px;">${t.Sigla} — ${t.Nome_Time}</span>`).join('');
+    const tbTimes = document.getElementById('tbodyTimesConfig');
+    if (tbTimes) {
+      tbTimes.innerHTML = STATE.times.map(t => `
+        <tr>
+          <td><span class="badge" style="background:${corSegura(t.Cor_Hex)};color:#fff;padding:5px 10px;">${esc(t.Sigla)}</span></td>
+          <td><strong>${esc(t.Nome_Time)}</strong> <small style="color:var(--muted);">(${esc(t.ID_Time)})</small></td>
+          <td>
+            <button class="btn-arrow" title="Editar Área" onclick="prepararEdicaoTime('${escJs(t.ID_Time)}')">✏️ Editar</button>
+            <button class="btn-arrow" style="color:#dc2626;" title="Excluir Área" onclick="excluirTimeUI('${escJs(t.ID_Time)}')">🗑️</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    const tbMem = document.getElementById('tbodyMembrosConfig');
+    if (tbMem) {
+      tbMem.innerHTML = STATE.membros.map(m => {
+        const tm = STATE.times.find(t => t.ID_Time === m.ID_Time_Principal);
+        return `
+          <tr>
+            <td><strong>${esc(m.Nome_Exibicao)}</strong></td>
+            <td>${esc(m.Email_Google || '-')}</td>
+            <td>${esc(tm ? tm.Sigla : m.ID_Time_Principal)}</td>
+            <td><span class="badge" style="background:#e0e7ff;color:#1d4ed8;">${esc(m.Perfil_Acesso)}</span></td>
+            <td>
+              <button class="btn-arrow" title="Editar Usuário" onclick="prepararEdicaoMembro('${escJs(m.ID_Membro)}')">✏️ Editar</button>
+              <button class="btn-arrow" style="color:#dc2626;" title="Excluir Usuário" onclick="excluirMembroUI('${escJs(m.ID_Membro)}')">🗑️</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
     }
   }
 
-  function abrirModalNovaTarefa() { document.getElementById('modalNovaTarefa').classList.remove('hidden'); }
-  function fecharModalNovaTarefa() { document.getElementById('modalNovaTarefa').classList.add('hidden'); }
-
-  function confirmarCriacaoTarefa() {
-    const titulo = document.getElementById('modTituloTarefa').value.trim();
-    if (!titulo) return alert('Digite o título da tarefa!');
-    const idPrj = document.getElementById('modProjetoTarefa').value;
-    const prj = STATE.projetos.find(p => p.ID_Projeto === idPrj) || {};
-    const payload = {
-      titulo,
-      idProjeto: idPrj,
-      idObjetivo: prj.ID_Objetivo || '',
-      idTime: prj.ID_Time || '',
-      responsavel: document.getElementById('modRespTarefa').value,
-      dataInicio: document.getElementById('modInicioTarefa').value,
-      dataPrazo: document.getElementById('modPrazoTarefa').value,
-      prioridade: document.getElementById('modPrioTarefa').value,
-      dependeDe: document.getElementById('modDepTarefa').value
-    };
-    fecharModalNovaTarefa();
-    document.getElementById('modTituloTarefa').value = '';
-    if (typeof google !== 'undefined' && google.script && google.script.run) {
-      google.script.run.withSuccessHandler(salvarCacheNavegador).apiCriarTarefa(payload);
-    }
+  function prepararEdicaoTime(idTime) {
+    const t = STATE.times.find(x => x.ID_Time === idTime);
+    if (!t) return;
+    document.getElementById('tituloFormTime').innerText = `✏️ Editando Área [${t.ID_Time}]`;
+    document.getElementById('cfgTimeIdEdicao').value = t.ID_Time;
+    document.getElementById('cfgTimeNome').value = t.Nome_Time || '';
+    document.getElementById('cfgTimeSigla').value = t.Sigla || '';
+    document.getElementById('cfgTimeCor').value = t.Cor_Hex || '#2563eb';
+    document.getElementById('btnCancelarEdicaoTime').classList.remove('hidden');
   }
 
-  function criarTimeUI() {
+  function limparFormTime() {
+    document.getElementById('tituloFormTime').innerText = '🏢 Cadastrar / Editar Área (Time)';
+    document.getElementById('cfgTimeIdEdicao').value = '';
+    document.getElementById('cfgTimeNome').value = '';
+    document.getElementById('cfgTimeSigla').value = '';
+    document.getElementById('btnCancelarEdicaoTime').classList.add('hidden');
+  }
+
+  function criarOuEditarTimeUI() {
+    const idEdicao = document.getElementById('cfgTimeIdEdicao').value.trim();
     const nome = document.getElementById('cfgTimeNome').value.trim();
     const sigla = document.getElementById('cfgTimeSigla').value.trim();
     const cor = document.getElementById('cfgTimeCor').value;
-    if (!nome || !sigla) return alert('Preencha nome e sigla!');
-    google.script.run.withSuccessHandler(salvarCacheNavegador).apiCriarItemEstrutura('TIME', { nome, sigla, cor });
+    if (!nome || !sigla) return alert('Preencha nome e sigla da Área/Time!');
+    limparFormTime();
+    const idGerado = idEdicao || gerarIdLocal('TM');
+
+    aplicarMutacaoLocalESincronizar(
+      () => {
+        if (idEdicao) {
+          const item = STATE.times.find(t => t.ID_Time === idEdicao);
+          if (item) { item.Nome_Time = nome; item.Sigla = sigla; item.Cor_Hex = cor; }
+        } else {
+          STATE.times.push({ ID_Time: idGerado, Nome_Time: nome, Sigla: sigla, Cor_Hex: cor, Ativo: 'SIM' });
+        }
+      },
+      runner => runner.apiCriarItemEstrutura('TIME', { idTimeEdicao: idEdicao, idGerado, nome, sigla, cor }),
+      'Salvar Área'
+    );
   }
 
-  function criarObjetivoUI() {
-    const titulo = document.getElementById('novoObjTitulo').value.trim();
-    if (!titulo) return;
-    google.script.run.withSuccessHandler(salvarCacheNavegador).apiCriarItemEstrutura('OBJETIVO', {
-      idTime: document.getElementById('novoObjTime').value,
-      titulo,
-      meta: document.getElementById('novoObjMeta').value
-    });
+  function excluirTimeUI(idTime) {
+    if (!confirm(`Deseja realmente excluir a área [${idTime}]?`)) return;
+    aplicarMutacaoLocalESincronizar(
+      () => { STATE.times = STATE.times.filter(t => t.ID_Time !== idTime); },
+      runner => runner.apiExcluirItem('TIME', idTime),
+      'Excluir Área'
+    );
   }
 
-  function criarProjetoUI() {
-    const nome = document.getElementById('novoPrjNome').value.trim();
-    if (!nome) return;
-    const idObj = document.getElementById('novoPrjObj').value;
-    const obj = STATE.objetivos.find(o => o.ID_Objetivo === idObj) || {};
-    google.script.run.withSuccessHandler(salvarCacheNavegador).apiCriarItemEstrutura('PROJETO', {
-      nome,
-      idObjetivo: idObj,
-      idTime: obj.ID_Time || '',
-      lider: document.getElementById('novoPrjLider').value
-    });
+  function prepararEdicaoMembro(idMembro) {
+    const m = STATE.membros.find(x => x.ID_Membro === idMembro);
+    if (!m) return;
+    document.getElementById('tituloFormMembro').innerText = `✏️ Editando Usuário [${m.Nome_Exibicao}]`;
+    document.getElementById('cfgMemIdEdicao').value = m.ID_Membro;
+    document.getElementById('cfgMemNome').value = m.Nome_Exibicao || '';
+    document.getElementById('cfgMemEmail').value = m.Email_Google || '';
+    document.getElementById('cfgMemTime').value = m.ID_Time_Principal || '';
+    document.getElementById('cfgMemPerfil').value = (m.Perfil_Acesso === 'MEMBRO' ? 'TIME' : m.Perfil_Acesso) || 'TIME';
+    document.getElementById('btnCancelarEdicaoMembro').classList.remove('hidden');
+  }
+
+  function limparFormMembro() {
+    document.getElementById('tituloFormMembro').innerText = '👤 Cadastrar / Editar Usuário (Conta Google & Perfil)';
+    document.getElementById('cfgMemIdEdicao').value = '';
+    document.getElementById('cfgMemNome').value = '';
+    document.getElementById('cfgMemEmail').value = '';
+    document.getElementById('btnCancelarEdicaoMembro').classList.add('hidden');
+  }
+
+  function criarOuEditarMembroUI() {
+    const idEdicao = document.getElementById('cfgMemIdEdicao').value.trim();
+    const nome = document.getElementById('cfgMemNome').value.trim();
+    const email = document.getElementById('cfgMemEmail').value.trim().toLowerCase();
+    const idTime = document.getElementById('cfgMemTime').value;
+    const perfil = document.getElementById('cfgMemPerfil').value;
+    if (!nome || !email) return alert('Informe o Nome de Exibição e o E-mail Google da pessoa!');
+    limparFormMembro();
+    const idGerado = idEdicao || gerarIdLocal('MEM');
+
+    aplicarMutacaoLocalESincronizar(
+      () => {
+        if (idEdicao) {
+          const item = STATE.membros.find(m => m.ID_Membro === idEdicao);
+          if (item) {
+            item.Nome_Exibicao = nome;
+            item.Email_Google = email;
+            item.ID_Time_Principal = idTime;
+            item.Perfil_Acesso = perfil;
+          }
+        } else {
+          STATE.membros.push({ ID_Membro: idGerado, Nome_Exibicao: nome, Email_Google: email, ID_Time_Principal: idTime, Perfil_Acesso: perfil });
+        }
+      },
+      runner => runner.apiCriarItemEstrutura('MEMBRO', { idMembroEdicao: idEdicao, idGerado, nome, email, idTime, perfil }),
+      'Salvar Usuário'
+    );
+  }
+
+  function excluirMembroUI(idMembro) {
+    if (!confirm(`Deseja realmente excluir o usuário [${idMembro}]?`)) return;
+    aplicarMutacaoLocalESincronizar(
+      () => { STATE.membros = STATE.membros.filter(m => m.ID_Membro !== idMembro); },
+      runner => runner.apiExcluirItem('MEMBRO', idMembro),
+      'Excluir Usuário'
+    );
   }
 
   function abrirCommandPalette() {
@@ -385,8 +1594,8 @@
     const q = (document.getElementById('inputBuscaComando').value || '').toLowerCase();
     const cont = document.getElementById('listaResultadosComando');
     const itens = STATE.tarefas
-      .filter(t => t.Titulo_Tarefa.toLowerCase().includes(q) || t.ID_Tarefa.toLowerCase().includes(q))
-      .map(t => `<div style="padding:8px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="fecharCommandPalette();navegarPara('kanban')">📋 <strong>[${t.ID_Tarefa}]</strong> ${t.Titulo_Tarefa} (${t.Status})</div>`);
-    cont.innerHTML = itens.join('') || '<div style="padding:8px;color:var(--muted);">Nenhum resultado encontrado.</div>';
+      .filter(t => String(t.Titulo_Tarefa || '').toLowerCase().includes(q) || String(t.ID_Tarefa || '').toLowerCase().includes(q))
+      .map(t => `<div style="padding:10px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="fecharCommandPalette();abrirModalEditarTarefa('${escJs(t.ID_Tarefa)}')">📋 <strong>[${esc(t.ID_Tarefa)}]</strong> ${esc(t.Titulo_Tarefa)} (${esc(t.Status)}) — <em>Clique para editar</em></div>`);
+    cont.innerHTML = itens.join('') || '<div style="padding:10px;color:var(--muted);">Nenhum resultado encontrado.</div>';
   }
 </script>

@@ -1,8 +1,8 @@
 /**
  * ============================================================================
- * ARQUIVO: Main.gs
- * OBJETIVO: Ponto de entrada do Web App (doGet), helper de modularização HTML
- *           include() e menu administrativo na Planilha Google.
+ * ARQUIVO: src/Main.gs (ARQUIVO COMPLETO)
+ * OBJETIVO: Ponto de entrada do Web App (doGet), helper include() e menu
+ *           administrativo na Planilha Google.
  * ============================================================================
  */
 
@@ -15,20 +15,17 @@ function doGet() {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
-/**
- * Permite incluir arquivos HTML separados (Views, Modais, CSS e JS) dentro do AppShell.html
- */
 function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
 }
 
-/**
- * Cria um menu amigável no topo da Planilha Google para sincronizar o cache com 1 clique.
- */
 function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('🚀 Hub Multi-Times')
-    .addItem('🔄 Sincronizar Planilha ➔ Cache RAM Agora', 'rotinaAgendadaAquecerCache')
-    .addItem('⚙️ Instalar Gatilhos de Cache Automático', 'instalarGatilhosAutomaticos')
-    .addToUi();
+  try {
+    const ui = SpreadsheetApp.getUi();
+    ui.createMenu('🚀 Hub Multi-Times')
+      .addItem('⏰ Ativar Agendamento de Cache (A cada 5 min)', 'agendarCacheServidor5Minutos')
+      .addItem('🔄 Sincronizar Planilha ➔ Cache RAM Agora', 'rotinaAgendadaAquecerCache')
+      .addItem('✨ Gerar Resumo =AI() Gemini na Planilha', 'apiInserirFormulaGeminiPlanilha')
+      .addToUi();
+  } catch (e) {}
 }

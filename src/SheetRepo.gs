@@ -1,16 +1,39 @@
 /**
  * ============================================================================
- * ARQUIVO: SheetRepo.gs
- * OBJETIVO: Camada de persistência no Google Sheets com formatação amigável
- *           para humanos, leitura em lote e LockService contra concorrência.
+ * ARQUIVO: src/SheetRepo.gs (ARQUIVO COMPLETO)
+ * OBJETIVO: Garantir a atualização em ordem estrita no Backend:
+ *           1º Atualiza o Cache de Memória do Servidor (CacheService Paginado)
+ *           2º Persiste na Planilha Google (Google Sheets) sob LockService.
  * ============================================================================
  */
 class SheetRepo {
-  /**
-   * Garante que todas as abas existam na Planilha Google e popula dados iniciais.
-   */
+  static obterPlanilha() {
+    if (APP_CONFIG.SPREADSHEET_ID && APP_CONFIG.SPREADSHEET_ID.trim() !== '') {
+      return SpreadsheetApp.openById(APP_CONFIG.SPREADSHEET_ID.trim());
+    }
+
+    try {
+      const planilhaAtiva = SpreadsheetApp.getActiveSpreadsheet();
+      if (planilhaAtiva) return planilhaAtiva;
+    } catch (e) {}
+
+    const props = PropertiesService.getScriptProperties();
+    const idSalvo = props.getProperty('AUTO_CREATED_SPREADSHEET_ID');
+    if (idSalvo) {
+      try {
+        return SpreadsheetApp.openById(idSalvo);
+      } catch (err) {
+        console.warn('Criando nova planilha base...');
+      }
+    }
+
+    const novaPlanilha = SpreadsheetApp.create(APP_CONFIG.DEFAULT_DB_FILENAME);
+    props.setProperty('AUTO_CREATED_SPREADSHEET_ID', novaPlanilha.getId());
+    return novaPlanilha;
+  }
+
   static inicializarBancoSeNecessario() {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = SheetRepo.obterPlanilha();
     const abas = APP_CONFIG.SHEETS;
 
     Object.keys(abas).forEach(chave => {
@@ -28,7 +51,6 @@ class SheetRepo {
       }
     });
 
-    // Se a aba de Times estiver apenas com o cabeçalho, insere a carga inicial de exemplo
     const sheetTimes = ss.getSheetByName(abas.TIMES);
     if (sheetTimes.getLastRow() <= 1) {
       SheetRepo.popularDadosExemploIniciais(ss);
@@ -36,9 +58,6 @@ class SheetRepo {
     }
   }
 
-  /**
-   * Insere dados iniciais amigáveis nas abas para o usuário já testar o sistema.
-   */
   static popularDadosExemploIniciais(ss) {
     const hoje = Utils.hojeISO();
     ss.getSheetByName(APP_CONFIG.SHEETS.TIMES).appendRow(['TM-DATA', 'Data Engineering & Analytics', 'DATA', '#1d4ed8', 'SIM']);
@@ -46,10 +65,10 @@ class SheetRepo {
     ss.getSheetByName(APP_CONFIG.SHEETS.TIMES).appendRow(['TM-TRANS', 'Transformation', 'TRANSF', '#15803d', 'SIM']);
     ss.getSheetByName(APP_CONFIG.SHEETS.TIMES).appendRow(['TM-PMO', 'PMO & Governance', 'PMO', '#c2410c', 'SIM']);
 
-    ss.getSheetByName(APP_CONFIG.SHEETS.MEMBROS).appendRow(['MEM-01', 'Beatriz (Data)', 'beatriz@empresa.com', 'TM-DATA', 'MEMBRO']);
-    ss.getSheetByName(APP_CONFIG.SHEETS.MEMBROS).appendRow(['MEM-02', 'Lucas (AI)', 'lucas@empresa.com', 'TM-AI', 'MEMBRO']);
-    ss.getSheetByName(APP_CONFIG.SHEETS.MEMBROS).appendRow(['MEM-03', 'Camila (Transf)', 'camila@empresa.com', 'TM-TRANS', 'MEMBRO']);
-    ss.getSheetByName(APP_CONFIG.SHEETS.MEMBROS).appendRow(['MEM-04', 'Rafael (PMO)', 'rafael@empresa.com', 'TM-PMO', 'GESTOR']);
+    ss.getSheetByName(APP_CONFIG.SHEETS.MEMBROS).appendRow(['MEM-01', 'Beatriz (Data)', 'beatriz@empresa.com', 'TM-DATA', 'TIME']);
+    ss.getSheetByName(APP_CONFIG.SHEETS.MEMBROS).appendRow(['MEM-02', 'Lucas (AI)', 'lucas@empresa.com', 'TM-AI', 'TIME']);
+    ss.getSheetByName(APP_CONFIG.SHEETS.MEMBROS).appendRow(['MEM-03', 'Camila (Transf)', 'camila@empresa.com', 'TM-TRANS', 'GESTOR']);
+    ss.getSheetByName(APP_CONFIG.SHEETS.MEMBROS).appendRow(['MEM-04', 'Rafael (PMO)', 'rafael@empresa.com', 'TM-PMO', 'ADMIN']);
 
     ss.getSheetByName(APP_CONFIG.SHEETS.OBJETIVOS).appendRow(['OBJ-01', 'TM-AI', 'Escalar agentes de IA nas rotinas internas', '3 agentes em produção', 'PUBLICO', '']);
     ss.getSheetByName(APP_CONFIG.SHEETS.OBJETIVOS).appendRow(['OBJ-02', 'TM-DATA', 'Unificar catálogo e qualidade de dados da área', '100% das tabelas auditadas', 'PUBLICO', '']);
@@ -70,17 +89,14 @@ class SheetRepo {
 
     ss.getSheetByName(APP_CONFIG.SHEETS.ROTINAS).appendRow([
       'ROT-01', 'Verificação Diária de Pipelines e Ingestão de Dados', 'TM-DATA', 'Beatriz (Data)',
-      'Diária', hoje, 'Pendente no Ciclo',
-      '[x] Checar logs de execução da madrugada | [ ] Validar volumetria de linhas | [ ] Atualizar status para o time',
-      'Pipelines verificados ontem sem falhas.', hoje, 'PUBLICO', ''
+      'Diária', hoje, 'Pendente',
+      'Conferir logs da madrugada, validar volumetria de linhas e atualizar status para o time.',
+      'Pipelines verificados sem falhas.', hoje, 'PUBLICO', ''
     ]);
   }
 
-  /**
-   * Lê uma aba da planilha e transforma em lista de objetos JSON.
-   */
   static lerAbaBruta(nomeAba) {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = SheetRepo.obterPlanilha();
     const sheet = ss.getSheetByName(nomeAba);
     if (!sheet || sheet.getLastRow() <= 1) return [];
 
@@ -102,9 +118,6 @@ class SheetRepo {
     return lista;
   }
 
-  /**
-   * Obtém os dados priorizando a Memória RAM (CacheService). Se não existir, lê do Sheets e popula o cache.
-   */
   static obterEntidadeComCache(nomeAba) {
     let dados = CacheManager.lerEntidadePaginada(nomeAba);
     if (!dados) {
@@ -115,35 +128,59 @@ class SheetRepo {
   }
 
   /**
-   * Adiciona um novo registro na planilha sob LockService e atualiza o Cache Paginado.
+   * INSERÇÃO EM ORDEM ESTRITA:
+   * 1º Atualiza imediatamente o Cache de Memória do Servidor (CacheService).
+   * 2º Grava a nova linha na Planilha Google (Sheets).
    */
   static inserirRegistro(nomeAba, objetoNovo) {
     const lock = LockService.getScriptLock();
     lock.waitLock(10000);
     try {
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
-      const sheet = ss.getSheetByName(nomeAba);
       const cabecalhos = APP_CONFIG.HEADERS[nomeAba];
-      const linha = cabecalhos.map(col => objetoNovo[col] !== undefined ? objetoNovo[col] : '');
-      sheet.appendRow(linha);
+      const registroLimpo = {};
+      cabecalhos.forEach(col => {
+        registroLimpo[col] = objetoNovo[col] !== undefined ? objetoNovo[col] : '';
+      });
 
-      const listaAtualizada = SheetRepo.lerAbaBruta(nomeAba);
-      const novaVersao = CacheManager.salvarEntidadePaginada(nomeAba, listaAtualizada);
-      return { versao: novaVersao, lista: listaAtualizada };
+      // PASSO 1: Atualiza o Cache de Memória do Servidor (RAM) imediatamente
+      const listaEmMemoria = SheetRepo.obterEntidadeComCache(nomeAba);
+      listaEmMemoria.push(registroLimpo);
+      const novaVersao = CacheManager.salvarEntidadePaginada(nomeAba, listaEmMemoria);
+
+      // PASSO 2: Grava na Planilha Google (Persistência Física)
+      const ss = SheetRepo.obterPlanilha();
+      const sheet = ss.getSheetByName(nomeAba);
+      const linhaPlanilha = cabecalhos.map(col => registroLimpo[col]);
+      sheet.appendRow(linhaPlanilha);
+      SpreadsheetApp.flush();
+
+      return { versao: novaVersao, lista: listaEmMemoria };
     } finally {
       lock.releaseLock();
     }
   }
 
   /**
-   * Aplica uma atualização parcial (Delta Patch) apenas nas colunas modificadas de uma linha,
-   * evitando que dois usuários sobrescrevam alterações simultâneas (Lost Update).
+   * ATUALIZAÇÃO PARCIAL (PATCH) EM ORDEM ESTRITA:
+   * 1º Atualiza o item no Cache de Memória do Servidor (CacheService).
+   * 2º Atualiza apenas as células alteradas na Planilha Google (Sheets).
    */
   static aplicarPatchNaLinha(nomeAba, colunaIdNome, valorId, camposParaAtualizar) {
     const lock = LockService.getScriptLock();
     lock.waitLock(10000);
     try {
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      // PASSO 1: Atualiza primeiro no Cache de Memória do Servidor (RAM)
+      const listaEmMemoria = SheetRepo.obterEntidadeComCache(nomeAba);
+      const itemCache = listaEmMemoria.find(item => String(item[colunaIdNome]) === String(valorId));
+      if (itemCache) {
+        Object.keys(camposParaAtualizar).forEach(col => {
+          itemCache[col] = camposParaAtualizar[col];
+        });
+      }
+      const novaVersao = CacheManager.salvarEntidadePaginada(nomeAba, listaEmMemoria);
+
+      // PASSO 2: Atualiza na Planilha Google (Persistência Física)
+      const ss = SheetRepo.obterPlanilha();
       const sheet = ss.getSheetByName(nomeAba);
       const matriz = sheet.getDataRange().getValues();
       const cabecalhos = matriz[0];
@@ -160,10 +197,44 @@ class SheetRepo {
           break;
         }
       }
+      SpreadsheetApp.flush();
 
-      const listaAtualizada = SheetRepo.lerAbaBruta(nomeAba);
-      const novaVersao = CacheManager.salvarEntidadePaginada(nomeAba, listaAtualizada);
-      return { versao: novaVersao, lista: listaAtualizada };
+      return { versao: novaVersao, lista: listaEmMemoria };
+    } finally {
+      lock.releaseLock();
+    }
+  }
+
+  /**
+   * EXCLUSÃO EM ORDEM ESTRITA:
+   * 1º Remove o item do Cache de Memória do Servidor (CacheService).
+   * 2º Remove a linha correspondente na Planilha Google (Sheets).
+   */
+  static excluirRegistroPorId(nomeAba, colunaIdNome, valorId) {
+    const lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+    try {
+      // PASSO 1: Remove primeiro do Cache de Memória do Servidor (RAM)
+      const listaEmMemoria = SheetRepo.obterEntidadeComCache(nomeAba);
+      const novaLista = listaEmMemoria.filter(item => String(item[colunaIdNome]) !== String(valorId));
+      const novaVersao = CacheManager.salvarEntidadePaginada(nomeAba, novaLista);
+
+      // PASSO 2: Remove a linha na Planilha Google (Persistência Física)
+      const ss = SheetRepo.obterPlanilha();
+      const sheet = ss.getSheetByName(nomeAba);
+      const matriz = sheet.getDataRange().getValues();
+      const cabecalhos = matriz[0];
+      const idxId = cabecalhos.indexOf(colunaIdNome);
+
+      for (let i = matriz.length - 1; i >= 1; i--) {
+        if (String(matriz[i][idxId]) === String(valorId)) {
+          sheet.deleteRow(i + 1);
+          break;
+        }
+      }
+      SpreadsheetApp.flush();
+
+      return { versao: novaVersao, lista: novaLista };
     } finally {
       lock.releaseLock();
     }

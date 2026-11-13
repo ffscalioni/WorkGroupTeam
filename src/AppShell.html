@@ -6,39 +6,57 @@
   <?!= include('Styles'); ?>
 </head>
 <body>
-  <!-- BARRA DE TELEMETRIA DO CACHE DUPLO E ATALHOS -->
+  <!-- BARRA DE TELEMETRIA DO CACHE DUPLO, AGENDAMENTO E PLANILHA -->
   <div class="telemetry-bar">
-    <div>
-      <span>🟢 <strong>Cache Duplo Ativo:</strong> localStorage + CacheService Paginado</span>
-      <span id="lblVersaoCache" style="margin-left:12px;">Versão: carregando...</span>
+    <div class="telemetry-group">
+      <span>🟢 <strong>Cache Duplo:</strong> Navegador + RAM Google</span>
+      <span class="telemetry-pill" id="lblVersaoCache">RAM: carregando...</span>
+      <span class="telemetry-pill" id="lblStatusAgendamento">⏰ Agendamento: verificando...</span>
     </div>
-    <div style="display:flex;gap:10px;align-items:center;">
+    <div class="telemetry-group">
       <span id="lblCotaEmail">📧 Cota MailApp: --</span>
+      <a id="linkPlanilhaBase" href="#" target="_blank" class="btn-mini">📊 Abrir Planilha Base</a>
       <button class="btn-mini" onclick="forcarSincroniaServidor()">🔄 Sincronizar Sheets ➔ Cache</button>
-      <button class="btn-mini" onclick="abrirCommandPalette()">⌨️ Comandos (Ctrl+K)</button>
+      <button class="btn-mini" onclick="vincularMinhaContaGoogleUI()">🔗 Vincular Meu E-mail Google</button>
+      <button class="btn-mini" onclick="abrirCommandPalette()">⌨️ Ctrl+K</button>
     </div>
   </div>
 
-  <!-- CABEÇALHO PRINCIPAL E NAVEGAÇÃO ENTRE VIEWS SEPARADAS -->
+  <!-- CABEÇALHO PRINCIPAL ESTILO PROTÓTIPO PREMIUM -->
   <header class="app-header">
-    <div>
-      <div class="brand-title">🚀 Workspace Hub Multi-Times</div>
-      <div class="brand-sub" id="lblUsuarioAtivo">Autenticando no Google Workspace...</div>
+    <div class="brand-area">
+      <div class="brand-logo">⚡</div>
+      <div>
+        <div class="brand-title">Hub Multi-Times: Projetos, Rotinas & Objetivos</div>
+        <div class="brand-sub" id="lblUsuarioAtivo">Conectando ao Google Workspace...</div>
+      </div>
     </div>
+
     <div class="nav-tabs">
       <button class="tab-btn active" id="tabBtn-kanban" onclick="navegarPara('kanban')">📋 Quadro & Dependências</button>
       <button class="tab-btn" id="tabBtn-rotinas" onclick="navegarPara('rotinas')">🔄 Rotinas & Checklists</button>
       <button class="tab-btn" id="tabBtn-hierarquia" onclick="navegarPara('hierarquia')">🎯 Objetivos & Projetos</button>
       <button class="tab-btn" id="tabBtn-relatorios" onclick="navegarPara('relatorios')">📊 Relatórios Gerenciais</button>
-      <button class="tab-btn" id="tabBtn-config" onclick="navegarPara('config')">⚙️ Configuração Multi-Times</button>
+      <button class="tab-btn" id="tabBtn-config" onclick="navegarPara('config')">⚙️ Config & Cache Server</button>
     </div>
-    <div style="display:flex;gap:8px;align-items:center;">
+
+    <div class="header-actions">
+      <div class="simulador-box" title="Simule o que cada usuário enxerga conforme as regras de visibilidade">
+        <span>👁️ Visão:</span>
+        <select id="selSimuladorVisao" onchange="renderizarInterface()">
+          <option value="GESTOR">Gestor Geral (Vê Tudo)</option>
+        </select>
+      </div>
+      <!-- NOVO BOTÃO: MINHAS ATIVIDADES (BASEADO NA CONTA GOOGLE LOGADA) -->
+      <button class="btn-foco" id="btnMinhasAtividades" style="background:#e0e7ff;color:#1d4ed8;border-color:#bfdbfe;" onclick="alternarMinhasAtividades()">
+        👤 Minhas Atividades <span id="badgeMinhasCount">(0)</span>
+      </button>
       <button class="btn-foco" id="btnMeuDia" onclick="alternarModoMeuDia()">☀️ Meu Dia</button>
       <button class="btn-primario" onclick="abrirModalNovaTarefa()">+ Nova Tarefa</button>
     </div>
   </header>
 
-  <!-- CONTAINER CENTRAL QUE CARREGA CADA VIEW DE UM ARQUIVO .HTML SEPARADO -->
+  <!-- ÁREA CENTRAL COM AS 5 VIEWS SEPARADAS -->
   <main class="main-container">
     <?!= include('View_Kanban'); ?>
     <?!= include('View_Rotinas'); ?>
@@ -47,11 +65,11 @@
     <?!= include('View_Config'); ?>
   </main>
 
-  <!-- POPUPS / MODAIS EM ARQUIVOS .HTML SEPARADOS -->
+  <!-- MODAIS SEPARADOS -->
   <?!= include('Modal_Tarefa'); ?>
   <?!= include('Modal_CommandPalette'); ?>
 
-  <!-- MOTOR JAVASCRIPT CENTRAL -->
+  <!-- MOTOR JAVASCRIPT COMPLETO -->
   <?!= include('ClientCore_JS'); ?>
 </body>
 </html>

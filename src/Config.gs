@@ -1,30 +1,45 @@
 /**
  * ============================================================================
- * ARQUIVO: Config.gs
+ * ARQUIVO: src/Config.gs (ARQUIVO COMPLETO)
  * OBJETIVO: Centralizar todas as variáveis de configuração, constantes de
- *           sistema, limites de paginação de cache e nomes das abas do Sheets.
+ *           sistema, agendamento padrão de 5 minutos e abas da planilha.
  * ============================================================================
  */
 const APP_CONFIG = Object.freeze({
   APP_NAME: 'Workspace Team Hub — Gestão Multi-Times',
-  VERSION: '4.0.0',
+  VERSION: '4.2.0',
   TIMEZONE: 'America/Sao_Paulo',
 
-  // Configurações do Motor de Cache em Memória RAM (CacheService)
+  /**
+   * PARÂMETRO AJUSTÁVEL — ID DA PLANILHA:
+   * Se deixar vazio (''), o sistema usa a planilha criada automaticamente!
+   * Se quiser fixar o ID da planilha na pasta compartilhada, cole entre as aspas.
+   */
+  SPREADSHEET_ID: '',
+  DEFAULT_DB_FILENAME: 'DB - Workspace Team Hub (Base de Dados)',
+
+  // Configurações do Motor de Cache em Memória RAM do Servidor Google (CacheService)
   CACHE: Object.freeze({
-    TTL_SECONDS: 21600,        // 6 horas (máximo permitido pelo Google Apps Script)
-    PAGE_SIZE_ITEMS: 50,       // Quantidade de registros por página (Chunk) para ficar abaixo de 100KB
-    PREFIX: 'HUB_V4_',         // Prefixo para evitar colisão de chaves em memória
-    VERSION_KEY: 'HUB_V4_VER'  // Chave que guarda o timestamp da última atualização
+    TTL_SECONDS: 21600,             // 6 horas na memória RAM do Google
+    PAGE_SIZE_ITEMS: 50,            // 50 registros por página (Chunk) para ficar abaixo de 100KB
+    DEFAULT_SCHEDULE_MINUTES: 5,    // Agendamento padrão: recarregar a cada 5 minutos!
+    PREFIX: 'HUB_V4_',              // Prefixo das chaves em memória
+    VERSION_KEY: 'HUB_V4_VER'       // Chave que guarda o timestamp da última atualização
   }),
 
   // Configurações de Segurança e Cotas de E-mail
   EMAIL: Object.freeze({
     ENABLED: true,
-    MIN_QUOTA_RESERVE: 15      // Reserva mínima da cota diária do MailApp para não travar a conta
+    MIN_QUOTA_RESERVE: 15
   }),
 
-  // Nomes das Abas no Google Sheets (Banco de Dados Amigável para Humanos)
+  // Valores aceitos pelo servidor (qualquer outro valor enviado pelo navegador é recusado)
+  STATUS_TAREFA: Object.freeze(['A Fazer', 'Em Andamento', 'Bloqueado', 'Concluído']),
+  PRIORIDADES: Object.freeze(['Alta', 'Média', 'Baixa']),
+  FREQUENCIAS: Object.freeze(['Pontual', 'Diária', 'Semanal', 'Mensal']),
+  PERFIS: Object.freeze(['ADMIN', 'GESTOR', 'TIME']),
+
+  // Nomes das 7 Abas no Google Sheets
   SHEETS: Object.freeze({
     TIMES: 'DB_Times',
     MEMBROS: 'DB_Membros',
@@ -35,7 +50,7 @@ const APP_CONFIG = Object.freeze({
     HISTORICO_ROTINAS: 'DB_Historico_Rotinas'
   }),
 
-  // Cabeçalhos Amigáveis das Abas
+  // Cabeçalhos Amigáveis das Abas (Incluindo suporte a fórmula =AI() do Gemini)
   HEADERS: Object.freeze({
     DB_Times: ['ID_Time', 'Nome_Time', 'Sigla', 'Cor_Hex', 'Ativo'],
     DB_Membros: ['ID_Membro', 'Nome_Exibicao', 'Email_Google', 'ID_Time_Principal', 'Perfil_Acesso'],

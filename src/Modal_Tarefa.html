@@ -1,23 +1,49 @@
 <div id="modalNovaTarefa" class="modal-backdrop hidden">
   <div class="modal-box">
-    <h3 style="margin-top:0;color:var(--primary);">➕ Incluir Nova Atividade</h3>
+    <h3 id="tituloModalTarefa" style="margin-top:0;color:var(--primary);">➕ Incluir Nova Atividade</h3>
+    <input type="hidden" id="modIdTarefaEdicao" value="">
+
     <div class="field" style="margin-bottom:10px;">
       <label>Descrição da Atividade</label>
       <input type="text" id="modTituloTarefa" placeholder="O que precisa ser feito?">
     </div>
+
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
-      <div class="field"><label>Projeto / Iniciativa</label><select id="modProjetoTarefa"></select></div>
-      <div class="field"><label>Responsável</label><select id="modRespTarefa"></select></div>
+      <div class="field">
+        <label>🎯 Objetivo da Atividade</label>
+        <select id="modObjetivoTarefa" onchange="aoMudarObjetivoModal()"></select>
+      </div>
+      <div class="field">
+        <label>📁 Projeto / Iniciativa</label>
+        <select id="modProjetoTarefa"></select>
+      </div>
+      <div class="field"><label>👤 Responsável</label><select id="modRespTarefa"></select></div>
+      <div class="field"><label>Prioridade</label>
+        <select id="modPrioTarefa"><option value="Alta">Alta</option><option value="Média" selected>Média</option><option value="Baixa">Baixa</option></select>
+      </div>
       <div class="field"><label>Data Início (ou Futura)</label><input type="date" id="modInicioTarefa"></div>
       <div class="field"><label>Prazo Final</label><input type="date" id="modPrazoTarefa"></div>
-      <div class="field"><label>Prioridade</label>
-        <select id="modPrioTarefa"><option>Alta</option><option selected>Média</option><option>Baixa</option></select>
-      </div>
       <div class="field"><label>⛓️ Depende de qual Tarefa?</label><select id="modDepTarefa"></select></div>
+      <div class="field">
+        <label>👁️ Tipo de Visibilidade</label>
+        <select id="modVisibilidadeTarefa">
+          <option value="PUBLICO">🌐 Público Geral</option>
+          <option value="TIME">🏢 Apenas Meu Time</option>
+          <option value="RESTRITO">🔒 Restrito (Usuários Específicos)</option>
+        </select>
+      </div>
+      <div class="field" style="grid-column: span 2;">
+        <label>Usuários Permitidos (se Restrito)</label>
+        <input type="text" id="modUsuariosPermitidos" placeholder="Ex: Beatriz (Data), Rafael (PMO)">
+      </div>
     </div>
-    <div style="display:flex;justify-content:flex-end;gap:8px;">
-      <button class="tab-btn" onclick="fecharModalNovaTarefa()">Cancelar</button>
-      <button class="btn-primario" onclick="confirmarCriacaoTarefa()">Salvar Tarefa</button>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;">
+      <button id="btnExcluirNoModal" class="btn-arrow hidden" style="background:#fef2f2;color:#dc2626;border-color:#fecaca;padding:8px 12px;" onclick="excluirTarefaPeloModal()">🗑️ Excluir Tarefa</button>
+      <div style="display:flex;gap:8px;margin-left:auto;">
+        <button class="tab-btn" onclick="fecharModalNovaTarefa()">Cancelar</button>
+        <button class="btn-primario" onclick="confirmarCriacaoOuEdicaoTarefa()">💾 Salvar Alterações</button>
+      </div>
     </div>
   </div>
 </div>
