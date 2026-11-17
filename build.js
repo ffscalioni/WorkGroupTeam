@@ -2,7 +2,7 @@
  * ============================================================================
  * ARQUIVO: build.js (Empacotador Local para Contornar Bloqueio do Clasp)
  * OBJETIVO: Manter os 19 arquivos separados no VS Code/GitHub, mas gerar
- *           automaticamente apenas 2 arquivos prontos na pasta "dist/" para
+ *           automaticamente apenas 3 arquivos prontos na pasta "dist/" para
  *           copiar e colar no Google Apps Script pelo navegador em segundos!
  * ============================================================================
  */
@@ -89,9 +89,10 @@ function gerarPacoteParaNavegador() {
     console.log('✅ Módulo copiado: Dicionario.html --> dist/3_Dicionario.html (crie o arquivo HTML "Dicionario" no editor)');
   }
 
-  console.log('\n🎉 PRONTO! Os 2 arquivos consolidados foram gerados na pasta "dist/":');
+  console.log('\n🎉 PRONTO! Os 3 arquivos foram gerados na pasta "dist/":');
   console.log('   1) dist/1_Codigo_Backend.gs  --> Cole no "Código.gs" do navegador');
   console.log('   2) dist/2_AppShell.html      --> Cole no "AppShell.html" do navegador');
+  console.log('   3) dist/3_Dicionario.html    --> Cole no "Dicionario.html" do navegador');
 }
 
 // Executa a função
