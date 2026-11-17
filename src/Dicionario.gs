@@ -18,6 +18,8 @@
 const DD_CONFIG = Object.freeze({
   DB_FILENAME: 'DB - Dicionário de Dados Regulatórios',
   PROP_ID: 'DD_SPREADSHEET_ID',
+  // Versão própria do cache do Dicionário: gravar aqui não força recarga no Workgroup (e vice-versa)
+  VERSION_KEY: 'HUB_V4_DD_VER',
   SHEETS: Object.freeze({
     REGS: 'DD_Regulatorios',
     CAMPOS: 'DD_Campos',
@@ -92,7 +94,45 @@ function ddLerAba_(ss, nomeAba) {
   });
 }
 
-/** Insere ou atualiza uma linha pela coluna-chave da aba. Só grava colunas conhecidas. */
+/* ===================== CACHE EM MEMÓRIA DO SERVIDOR (RAM) ===================== */
+
+/** Leitura com cache: RAM do servidor primeiro; se expirou, lê a planilha e recarrega a RAM. */
+function ddLerComCache_(nomeAba) {
+  let dados = CacheManager.lerEntidadePaginada(nomeAba);
+  if (!dados) {
+    dados = ddLerAba_(ddInicializar_(), nomeAba);
+    CacheManager.salvarEntidadePaginada(nomeAba, dados, DD_CONFIG.VERSION_KEY);
+  }
+  return dados;
+}
+
+/** Recarrega as 4 abas do Dicionário na RAM. Chamado pelo agendamento de 5 minutos. */
+function ddAquecerCache_() {
+  const ss = ddInicializar_();
+  let versao = 0;
+  Object.values(DD_CONFIG.SHEETS).forEach(nomeAba => {
+    versao = CacheManager.salvarEntidadePaginada(nomeAba, ddLerAba_(ss, nomeAba), DD_CONFIG.VERSION_KEY);
+  });
+  return versao;
+}
+
+/**
+ * Gatilho onEdit da planilha do Dicionário (instalado por instalarGatilhosAutomaticos):
+ * edição manual numa aba DD_ recarrega só aquela aba na RAM.
+ */
+function aoEditarDicionarioManualmente(e) {
+  if (!e || !e.range) return;
+  const nomeAba = e.range.getSheet().getName();
+  if (Object.values(DD_CONFIG.SHEETS).indexOf(nomeAba) === -1) return;
+  CacheManager.salvarEntidadePaginada(nomeAba, ddLerAba_(e.source, nomeAba), DD_CONFIG.VERSION_KEY);
+}
+
+/**
+ * INSERÇÃO/EDIÇÃO EM ORDEM ESTRITA (mesma regra do SheetRepo):
+ * 1º Atualiza o Cache de Memória do Servidor (CacheService).
+ * 2º Grava a linha na Planilha Google (Sheets).
+ * Só grava colunas conhecidas. Na edição, coluna que não veio no registro mantém o valor atual.
+ */
 function ddGravar_(nomeAba, registro) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
@@ -104,14 +144,21 @@ function ddGravar_(nomeAba, registro) {
     const ids = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
     const idx = ids.indexOf(String(registro[chave]));
     const numLinha = idx > -1 ? idx + 2 : sheet.getLastRow() + 1;
-    // Na edição, coluna que não veio no registro mantém o valor que já está na planilha
     const atual = idx > -1 ? sheet.getRange(numLinha, 1, 1, cab.length).getValues()[0] : [];
     const linha = cab.map((c, i) => registro[c] === undefined && idx > -1 ? String(atual[i]) : texto_(registro[c], 2000));
-    sheet.getRange(numLinha, 1, 1, cab.length).setNumberFormat('@').setValues([linha]);
-    SpreadsheetApp.flush();
     const salvo = {};
     cab.forEach((c, i) => { salvo[c] = linha[i]; });
-    return salvo;
+
+    // PASSO 1: Cache de Memória do Servidor (RAM)
+    const lista = ddLerComCache_(nomeAba);
+    const pos = lista.findIndex(item => String(item[chave]) === String(salvo[chave]));
+    if (pos > -1) lista[pos] = salvo; else lista.push(salvo);
+    const versao = CacheManager.salvarEntidadePaginada(nomeAba, lista, DD_CONFIG.VERSION_KEY);
+
+    // PASSO 2: Planilha Google (Persistência Física)
+    sheet.getRange(numLinha, 1, 1, cab.length).setNumberFormat('@').setValues([linha]);
+    SpreadsheetApp.flush();
+    return { ok: true, registro: salvo, versaoCache: versao };
   } finally {
     lock.releaseLock();
   }
@@ -119,34 +166,52 @@ function ddGravar_(nomeAba, registro) {
 
 /* ================================ ENDPOINTS ================================ */
 
+/** Estado completo do Dicionário, servido da RAM do servidor (a planilha só é lida se o cache expirou). */
 function apiDDObterEstado() {
   const ctx = AuthService.exigirMembro(AuthService.obterContexto());
-  const ss = ddInicializar_();
   const s = DD_CONFIG.SHEETS;
-  return {
+  const estado = {
     usuarioEmail: ctx.email,
     perfil: ctx.perfil,
     podeEditar: AuthService.ehGestao(ctx),
     urlApp: ScriptApp.getService().getUrl(),
-    planilhaUrl: ctx.perfil === 'ADMIN' ? ss.getUrl() : '',
-    regs: ddLerAba_(ss, s.REGS),
-    campos: ddLerAba_(ss, s.CAMPOS),
-    checks: ddLerAba_(ss, s.CHECKS),
-    lineage: ddLerAba_(ss, s.LINEAGE)
+    planilhaUrl: ctx.perfil === 'ADMIN' ? ddObterPlanilha_().getUrl() : '',
+    regs: ddLerComCache_(s.REGS),
+    campos: ddLerComCache_(s.CAMPOS),
+    checks: ddLerComCache_(s.CHECKS),
+    lineage: ddLerComCache_(s.LINEAGE)
   };
+  estado.versaoCache = CacheManager.obterVersaoAtual(DD_CONFIG.VERSION_KEY);
+  return estado;
 }
 
-/** Remove a linha de uma aba pela chave (1ª coluna). */
+/** Polling leve do navegador: só a versão do cache do Dicionário (mesmo padrão de apiVerificarVersaoCache). */
+function apiDDVerificarVersaoCache() {
+  return { versaoCache: CacheManager.obterVersaoAtual(DD_CONFIG.VERSION_KEY) };
+}
+
+/**
+ * EXCLUSÃO EM ORDEM ESTRITA:
+ * 1º Remove do Cache de Memória do Servidor (CacheService).
+ * 2º Remove a linha na Planilha Google (Sheets), pela chave da 1ª coluna.
+ */
 function ddExcluir_(nomeAba, idRegistro) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
+    const chave = DD_CONFIG.CHAVES[nomeAba];
+
+    // PASSO 1: Cache de Memória do Servidor (RAM)
+    const lista = ddLerComCache_(nomeAba).filter(item => String(item[chave]) !== String(idRegistro));
+    const versao = CacheManager.salvarEntidadePaginada(nomeAba, lista, DD_CONFIG.VERSION_KEY);
+
+    // PASSO 2: Planilha Google (Persistência Física)
     const sheet = ddInicializar_().getSheetByName(nomeAba);
     const ids = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
     const idx = ids.indexOf(String(idRegistro));
     if (idx > -1) sheet.deleteRow(idx + 2);
     SpreadsheetApp.flush();
-    return { ok: true };
+    return { ok: true, versaoCache: versao };
   } finally {
     lock.releaseLock();
   }

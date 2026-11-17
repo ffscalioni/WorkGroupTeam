@@ -31,10 +31,12 @@ function instalarGatilhosAutomaticos(intervaloMinutos) {
   // 1. Garante que a planilha exista e carrega todo o JSON paginado na memória RAM agora
   SheetRepo.inicializarBancoSeNecessario();
   const planilhaBanco = SheetRepo.obterPlanilha();
+  const planilhaDicionario = ddInicializar_();
   CacheManager.aquecerTodoOCache();
+  ddAquecerCache_();
 
   // 2. Apaga somente os gatilhos deste módulo, para não duplicar nem remover gatilhos de terceiros
-  const funcoesDesteModulo = ['rotinaAgendadaAquecerCache', 'aoEditarPlanilhaManualmente'];
+  const funcoesDesteModulo = ['rotinaAgendadaAquecerCache', 'aoEditarPlanilhaManualmente', 'aoEditarDicionarioManualmente'];
   ScriptApp.getProjectTriggers()
     .filter(t => funcoesDesteModulo.indexOf(t.getHandlerFunction()) > -1)
     .forEach(t => ScriptApp.deleteTrigger(t));
@@ -48,6 +50,12 @@ function instalarGatilhosAutomaticos(intervaloMinutos) {
   // 4. Cria o gatilho que atualiza o cache quando alguém edita a planilha manualmente
   ScriptApp.newTrigger('aoEditarPlanilhaManualmente')
     .forSpreadsheet(planilhaBanco)
+    .onEdit()
+    .create();
+
+  // 5. Mesmo gatilho para a planilha própria do Dicionário de Dados
+  ScriptApp.newTrigger('aoEditarDicionarioManualmente')
+    .forSpreadsheet(planilhaDicionario)
     .onEdit()
     .create();
 
@@ -91,6 +99,7 @@ function obterStatusAgendamentoCache() {
  */
 function rotinaAgendadaAquecerCache() {
   CacheManager.aquecerTodoOCache();
+  ddAquecerCache_(); // Dicionário de Dados: planilha própria, versão de cache própria
   const agora = Utilities.formatDate(new Date(), APP_CONFIG.TIMEZONE, 'dd/MM/yyyy HH:mm:ss');
   PropertiesService.getScriptProperties().setProperty('CACHE_LAST_WARMUP', agora);
 }

@@ -177,12 +177,55 @@
     // Em pré-visualizações sem armazenamento local a edição vale só enquanto a página estiver aberta
     try { localStorage.setItem(CHAVE_DEMO, JSON.stringify({ regs: DD.regs, campos: DD.campos, checks: DD.checks, lineage: DD.lineage })); } catch (e) {}
   }
+  /* Cache local do navegador (mesmo padrão do Workgroup):
+     1. abre na hora com a última cópia salva neste navegador;
+     2. busca o estado na RAM do servidor e substitui a cópia;
+     3. a cada 30s consulta só a versão e recarrega se alguém alterou algo. */
+  const CHAVE_CACHE_LOCAL = 'DD_HUB_V4_CACHE';
+  let OPERACOES_EM_BACKGROUND = 0;
+
+  function salvarCacheLocal() {
+    if (!TEM_SERVIDOR) return;
+    try { localStorage.setItem(CHAVE_CACHE_LOCAL, JSON.stringify(DD)); } catch (e) {} // sem espaço: segue só com a RAM do servidor
+  }
+  function aplicarEstado(res) {
+    Object.assign(DD, res);
+    DD.versaoCache = String(DD.versaoCache || '0');
+    $('lblUsuario').innerText = `${DD.usuarioEmail} · Perfil ${DD.perfil}` + (DD.podeEditar ? '' : ' (somente leitura; pode incluir data quality checks)');
+    if (DD.urlApp) $('lnkPortal').href = DD.urlApp;
+    if (DD.planilhaUrl) { $('lnkPlanilha').href = DD.planilhaUrl; $('lnkPlanilha').classList.remove('hidden'); }
+    iniciarTela();
+  }
   function chamar(nomeFn, arg, aoTerminar) {
     if (!TEM_SERVIDOR) { salvarDemo(); toast('Salvo (modo demonstração local)'); if (aoTerminar) aoTerminar(); return; }
+    // A tela já mudou (atualização otimista); grava a cópia local e envia ao servidor em segundo plano
+    salvarCacheLocal();
+    OPERACOES_EM_BACKGROUND++;
     google.script.run
-      .withSuccessHandler(() => { toast('Salvo na base do Dicionário'); if (aoTerminar) aoTerminar(); })
-      .withFailureHandler(err => { alert('Não foi possível salvar: ' + err.message); carregar(); })
+      .withSuccessHandler(res => {
+        OPERACOES_EM_BACKGROUND = Math.max(0, OPERACOES_EM_BACKGROUND - 1);
+        if (res && res.versaoCache) { DD.versaoCache = String(res.versaoCache); salvarCacheLocal(); }
+        toast('Salvo na base do Dicionário');
+        if (aoTerminar) aoTerminar();
+      })
+      .withFailureHandler(err => {
+        OPERACOES_EM_BACKGROUND = Math.max(0, OPERACOES_EM_BACKGROUND - 1);
+        alert('Não foi possível salvar: ' + err.message);
+        sincronizarComServidor(); // desfaz a mudança local trazendo o estado real
+      })
       [nomeFn](arg);
+  }
+  function sincronizarComServidor() {
+    google.script.run
+      .withSuccessHandler(res => { aplicarEstado(res); salvarCacheLocal(); })
+      .withFailureHandler(err => { $('lblUsuario').innerText = err.message; alert(err.message); })
+      .apiDDObterEstado();
+  }
+  function verificarAtualizacaoSilenciosa() {
+    if (OPERACOES_EM_BACKGROUND > 0) return;
+    google.script.run.withSuccessHandler(res => {
+      if (res && String(res.versaoCache) !== String(DD.versaoCache) && OPERACOES_EM_BACKGROUND === 0) sincronizarComServidor();
+    }).apiDDVerificarVersaoCache();
   }
   function carregar() {
     if (!TEM_SERVIDOR) {
@@ -193,16 +236,11 @@
       iniciarTela();
       return;
     }
-    google.script.run
-      .withSuccessHandler(res => {
-        Object.assign(DD, res);
-        $('lblUsuario').innerText = `${DD.usuarioEmail} · Perfil ${DD.perfil}` + (DD.podeEditar ? '' : ' (somente leitura; pode incluir data quality checks)');
-        if (DD.urlApp) $('lnkPortal').href = DD.urlApp;
-        if (DD.planilhaUrl) { $('lnkPlanilha').href = DD.planilhaUrl; $('lnkPlanilha').classList.remove('hidden'); }
-        iniciarTela();
-      })
-      .withFailureHandler(err => { $('lblUsuario').innerText = err.message; alert(err.message); })
-      .apiDDObterEstado();
+    let local = null;
+    try { local = JSON.parse(localStorage.getItem(CHAVE_CACHE_LOCAL) || 'null'); } catch (e) {}
+    if (local && Array.isArray(local.regs)) aplicarEstado(local);
+    sincronizarComServidor();
+    if (!carregar._polling) carregar._polling = setInterval(verificarAtualizacaoSilenciosa, 30000);
   }
 
   /* ---------- montagem ---------- */

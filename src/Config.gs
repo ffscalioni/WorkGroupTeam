@@ -22,6 +22,7 @@ const APP_CONFIG = Object.freeze({
   CACHE: Object.freeze({
     TTL_SECONDS: 21600,             // 6 horas na memória RAM do Google
     PAGE_SIZE_ITEMS: 50,            // 50 registros por página (Chunk) para ficar abaixo de 100KB
+    PAGE_MAX_BYTES: 90000,          // Teto por página: textos longos fecham a página antes dos 50 itens
     DEFAULT_SCHEDULE_MINUTES: 5,    // Agendamento padrão: recarregar a cada 5 minutos!
     PREFIX: 'HUB_V4_',              // Prefixo das chaves em memória
     VERSION_KEY: 'HUB_V4_VER'       // Chave que guarda o timestamp da última atualização
