@@ -6,7 +6,19 @@
  * ============================================================================
  */
 
-function doGet() {
+function doGet(e) {
+  // Página inicial escolhe o módulo; ?modulo=workgroup ou ?modulo=dicionario abre direto
+  const modulo = e && e.parameter ? String(e.parameter.modulo || '') : '';
+  if (modulo === 'dicionario') {
+    SheetRepo.inicializarBancoSeNecessario(); // a identificação do usuário usa DB_Membros
+    return HtmlService.createHtmlOutputFromFile('Dicionario')
+      .setTitle('Dicionário de Dados Regulatórios')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  }
+  if (modulo !== 'workgroup') {
+    return ddPaginaPortal_();
+  }
+
   SheetRepo.inicializarBancoSeNecessario();
   return HtmlService.createTemplateFromFile('AppShell')
     .evaluate()

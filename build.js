@@ -24,6 +24,7 @@ const ORDEM_ARQUIVOS_GS = [
   'NotificationService.gs',
   'Controllers.gs',
   'Triggers.gs',
+  'Dicionario.gs',
   'Main.gs'
 ];
 
@@ -79,6 +80,13 @@ function gerarPacoteParaNavegador() {
 
     const caminhoHtmlFinal = path.join(PASTA_DESTINO, '2_AppShell.html');
     fs.writeFileSync(caminhoHtmlFinal, htmlFinal, 'utf8');
+  }
+
+  // 4. Módulo Dicionário de Dados: página independente, copiada como está
+  const caminhoDicionario = path.join(PASTA_ORIGEM, 'Dicionario.html');
+  if (fs.existsSync(caminhoDicionario)) {
+    fs.copyFileSync(caminhoDicionario, path.join(PASTA_DESTINO, '3_Dicionario.html'));
+    console.log('✅ Módulo copiado: Dicionario.html --> dist/3_Dicionario.html (crie o arquivo HTML "Dicionario" no editor)');
   }
 
   console.log('\n🎉 PRONTO! Os 2 arquivos consolidados foram gerados na pasta "dist/":');
