@@ -20,7 +20,9 @@ function doGet(e) {
   }
 
   SheetRepo.inicializarBancoSeNecessario();
-  return HtmlService.createTemplateFromFile('AppShell')
+  const pagina = HtmlService.createTemplateFromFile('AppShell');
+  pagina.urlPortal = ScriptApp.getService().getUrl(); // botão de voltar ao menu de módulos
+  return pagina
     .evaluate()
     .setTitle(APP_CONFIG.APP_NAME)
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)

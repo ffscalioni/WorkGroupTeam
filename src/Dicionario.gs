@@ -18,6 +18,8 @@
 const DD_CONFIG = Object.freeze({
   DB_FILENAME: 'DB - Dicionário de Dados Regulatórios',
   PROP_ID: 'DD_SPREADSHEET_ID',
+  // Última atualização da carga inicial já aplicada numa planilha existente (ver ddAplicarAtualizacao_)
+  PROP_VERSAO_CARGA: 'DD_VERSAO_CARGA',
   // Versão própria do cache do Dicionário: gravar aqui não força recarga no Workgroup (e vice-versa)
   VERSION_KEY: 'HUB_V4_DD_VER',
   SHEETS: Object.freeze({
@@ -30,7 +32,7 @@ const DD_CONFIG = Object.freeze({
   // Camadas do lineage, na ordem em que o dado percorre até o arquivo regulatório
   CAMADAS: Object.freeze(['ORIGEM', 'ANALITICO', 'CONSOLIDADO', 'LAYOUT']),
   HEADERS: Object.freeze({
-    DD_Regulatorios: ['cod', 'nome', 'regulador', 'escopo', 'area', 'periodicidade', 'prazo', 'estado', 'condicao', 'sistemaFonte', 'formaEnvio', 'manualidade', 'ownerDado', 'reportOwner', 'respLegal', 'diretor', 'nDados', 'nCde', 'dimensoes', 'auditoria', 'armAtual', 'armAlvo', 'link'],
+    DD_Regulatorios: ['cod', 'nome', 'regulador', 'escopo', 'area', 'periodicidade', 'prazo', 'estado', 'condicao', 'sistemaFonte', 'formaEnvio', 'manualidade', 'ownerDado', 'reportOwner', 'responsavelEnvio', 'areaReportOwner', 'tipoReport', 'baseNormativa', 'respLegal', 'diretor', 'nDados', 'nCde', 'dimensoes', 'auditoria', 'armAtual', 'armAlvo', 'link'],
     DD_Campos: ['id', 'codReporte', 'reporte', 'bloco', 'dado', 'atributo', 'origem', 'sistemaFonte', 'campoOrigem', 'regra', 'definicao', 'cde', 'area',
       'dataOwner', 'ownerConfirmado', 'slo', 'reportOwner', 'statusAda', 'campoAda', 'origemAda', 'observacoes', 'idElemento', 'outrosRegs', 'evidencia', 'status'],
     DD_Quality_Checks: ['id', 'idCampo', 'codReporte', 'tipo', 'descricao', 'base', 'prioridade', 'origem'],
@@ -57,6 +59,64 @@ function ddLerSeed_() {
   return { regs: [], campos: [], checks: [], lineage: [] };
 }
 
+/**
+ * Atualiza uma vez uma planilha que já existia com a revisão mais nova da carga inicial
+ * (bloco "atualizacao" do DD_SEED): cria colunas novas, atualiza só as colunas listadas
+ * (o resto do que foi editado é mantido), inclui registros novos e remove os retirados.
+ * @return {boolean} true se alterou a planilha.
+ */
+function ddAplicarAtualizacao_(ss) {
+  const seed = ddLerSeed_();
+  const atual = seed.atualizacao;
+  if (!atual) return false;
+  const props = PropertiesService.getScriptProperties();
+  if (Number(props.getProperty(DD_CONFIG.PROP_VERSAO_CARGA) || 1) >= atual.versao) return false;
+
+  // Sem lock próprio: quem grava já segura o lock do script, e a atualização pode rodar de novo sem efeito
+  {
+    const s = DD_CONFIG.SHEETS;
+    const listaSeed = { DD_Regulatorios: seed.regs, DD_Campos: seed.campos, DD_Quality_Checks: seed.checks, DD_Lineage: seed.lineage };
+    Object.values(s).forEach(nomeAba => {
+      const sheet = ss.getSheetByName(nomeAba);
+      if (!sheet) return;
+      const chave = DD_CONFIG.CHAVES[nomeAba];
+      const valores = sheet.getDataRange().getValues();
+      // 1. Colunas novas entram no fim do cabeçalho
+      const cab = valores[0].map(String);
+      DD_CONFIG.HEADERS[nomeAba].forEach(c => { if (cab.indexOf(c) === -1) cab.push(c); });
+      const iChave = cab.indexOf(chave);
+      const remover = {};
+      ((atual.remover || {})[nomeAba] || []).forEach(id => { remover[id] = true; });
+      // 2. Remove os retirados
+      let linhas = valores.slice(1)
+        .map(l => cab.map((_, i) => (l[i] === undefined ? '' : l[i])))
+        .filter(l => String(l[iChave]) !== '' && !remover[String(l[iChave])]);
+      // 3. Atualiza as colunas listadas e inclui os registros novos
+      const colunas = (atual.atualizarColunas || {})[nomeAba];
+      if (colunas) {
+        const pos = {};
+        linhas.forEach((l, i) => { pos[String(l[iChave])] = i; });
+        listaSeed[nomeAba].forEach(o => {
+          const k = String(o[chave]);
+          if (pos[k] !== undefined) {
+            colunas.forEach(c => { linhas[pos[k]][cab.indexOf(c)] = o[c] === undefined ? '' : String(o[c]); });
+          } else {
+            linhas.push(cab.map(c => (o[c] === undefined || o[c] === null) ? '' : String(o[c])));
+          }
+        });
+      }
+      // 4. Regrava a aba inteira de uma vez
+      sheet.getRange(1, 1, 1, cab.length).setValues([cab])
+        .setFontWeight('bold').setBackground('#0f172a').setFontColor('#ffffff');
+      const ultima = sheet.getLastRow();
+      if (ultima > 1) sheet.getRange(2, 1, ultima - 1, sheet.getLastColumn()).clearContent();
+      if (linhas.length) sheet.getRange(2, 1, linhas.length, cab.length).setNumberFormat('@').setValues(linhas);
+    });
+    props.setProperty(DD_CONFIG.PROP_VERSAO_CARGA, String(atual.versao));
+    return true;
+  }
+}
+
 function ddInicializar_() {
   const ss = ddObterPlanilha_();
   const s = DD_CONFIG.SHEETS;
@@ -81,7 +141,8 @@ function ddInicializar_() {
       carregou = true;
     }
   });
-  // A RAM pode ter guardado as abas vazias: recarrega o cache com a carga inicial
+  if (ddAplicarAtualizacao_(ss)) carregou = true;
+  // A RAM pode ter guardado as abas vazias ou desatualizadas: recarrega o cache
   if (carregou) {
     Object.values(s).forEach(nomeAba => CacheManager.salvarEntidadePaginada(nomeAba, ddLerAba_(ss, nomeAba), DD_CONFIG.VERSION_KEY));
   }
