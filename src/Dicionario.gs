@@ -51,34 +51,40 @@ function ddObterPlanilha_() {
   return nova;
 }
 
-/** Lê o bloco DD_SEED embutido em Dicionario.html (fonte única da carga inicial). */
+/** Carga inicial: DD_SEED_DADOS_ é gerada pelo build.js a partir do bloco DD_SEED de Dicionario.html. */
 function ddLerSeed_() {
-  const html = HtmlService.createHtmlOutputFromFile('Dicionario').getContent();
-  const ini = html.indexOf('/*DD_SEED_INICIO*/');
-  const fim = html.indexOf('/*DD_SEED_FIM*/');
-  if (ini === -1 || fim === -1) return { regs: [], campos: [], checks: [], lineage: [] };
-  return JSON.parse(html.substring(ini + '/*DD_SEED_INICIO*/'.length, fim).replace(/<\\\//g, '</'));
+  if (typeof DD_SEED_DADOS_ !== 'undefined') return DD_SEED_DADOS_;
+  return { regs: [], campos: [], checks: [], lineage: [] };
 }
 
 function ddInicializar_() {
   const ss = ddObterPlanilha_();
   const s = DD_CONFIG.SHEETS;
-  let seed = null;
+  let seed = null, carregou = false;
   [[s.REGS, 'regs'], [s.CAMPOS, 'campos'], [s.CHECKS, 'checks'], [s.LINEAGE, 'lineage']].forEach(par => {
     const nomeAba = par[0];
-    if (ss.getSheetByName(nomeAba)) return;
     const cab = DD_CONFIG.HEADERS[nomeAba];
-    const sheet = ss.insertSheet(nomeAba);
+    let sheet = ss.getSheetByName(nomeAba);
+    // Aba já com dados é a fonte da verdade: nunca é sobrescrita
+    if (sheet && sheet.getLastRow() > 1) return;
+    if (!sheet) {
+      sheet = ss.insertSheet(nomeAba);
+      sheet.getRange(1, 1, 1, cab.length).setValues([cab])
+        .setFontWeight('bold').setBackground('#0f172a').setFontColor('#ffffff');
+      sheet.setFrozenRows(1);
+    }
     seed = seed || ddLerSeed_();
     const linhas = (seed[par[1]] || []).map(o => cab.map(c => (o[c] === undefined || o[c] === null) ? '' : String(o[c])));
-    sheet.getRange(1, 1, 1, cab.length).setValues([cab])
-      .setFontWeight('bold').setBackground('#0f172a').setFontColor('#ffffff');
     if (linhas.length) {
       // Formato texto evita que códigos como "2061" ou "DD-001" sejam convertidos pelo Sheets
       sheet.getRange(2, 1, linhas.length, cab.length).setNumberFormat('@').setValues(linhas);
+      carregou = true;
     }
-    sheet.setFrozenRows(1);
   });
+  // A RAM pode ter guardado as abas vazias: recarrega o cache com a carga inicial
+  if (carregou) {
+    Object.values(s).forEach(nomeAba => CacheManager.salvarEntidadePaginada(nomeAba, ddLerAba_(ss, nomeAba), DD_CONFIG.VERSION_KEY));
+  }
   return ss;
 }
 
@@ -99,7 +105,8 @@ function ddLerAba_(ss, nomeAba) {
 /** Leitura com cache: RAM do servidor primeiro; se expirou, lê a planilha e recarrega a RAM. */
 function ddLerComCache_(nomeAba) {
   let dados = CacheManager.lerEntidadePaginada(nomeAba);
-  if (!dados) {
+  // Lista vazia também vai à planilha: ddInicializar_ preenche abas que ficaram sem a carga inicial
+  if (!dados || !dados.length) {
     dados = ddLerAba_(ddInicializar_(), nomeAba);
     CacheManager.salvarEntidadePaginada(nomeAba, dados, DD_CONFIG.VERSION_KEY);
   }

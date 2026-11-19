@@ -51,6 +51,17 @@ function gerarPacoteParaNavegador() {
     }
   });
 
+  // Carga inicial do Dicionário: o HtmlService remove comentários ao servir o HTML, então o
+  // servidor não consegue achar o bloco DD_SEED lá. O build copia o JSON para o backend.
+  const htmlDic = fs.readFileSync(path.join(PASTA_ORIGEM, 'Dicionario.html'), 'utf8');
+  const iniSeed = htmlDic.indexOf('/*DD_SEED_INICIO*/'), fimSeed = htmlDic.indexOf('/*DD_SEED_FIM*/');
+  if (iniSeed > -1 && fimSeed > -1) {
+    const seedJson = htmlDic.substring(iniSeed + '/*DD_SEED_INICIO*/'.length, fimSeed).split('<\\/').join('</');
+    JSON.parse(seedJson); // falha o build se o bloco estiver corrompido
+    conteudoBackend += `\n// ==================== CARGA INICIAL DO DICIONÁRIO (gerada de Dicionario.html) ====================\nconst DD_SEED_DADOS_ = ${seedJson};\n`;
+    console.log('✅ Carga inicial do Dicionário incluída no backend');
+  }
+
   const caminhoBackendFinal = path.join(PASTA_DESTINO, '1_Codigo_Backend.gs');
   fs.writeFileSync(caminhoBackendFinal, conteudoBackend, 'utf8');
 
