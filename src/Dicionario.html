@@ -321,7 +321,7 @@
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
         <button class="pri" id="btnSalvarReg" ${ro}>💾 Salvar regulatório</button>
         ${novo ? '' : '<button class="sec" id="btnVerCampos">🧬 Ver campos deste reporte</button>'}
-        ${!novo && r.link && /^https?:\/\//.test(r.link) ? `<a class="sec" style="text-decoration:none;padding:7px 12px;border:1px solid #cbd5e1;border-radius:8px;color:inherit" target="_blank" rel="noopener" href="${esc(r.link)}">🔗 Layout oficial</a>` : ''}
+        ${!novo && r.link && /^https?:\/{2}/.test(r.link) ? `<a class="sec" style="text-decoration:none;padding:7px 12px;border:1px solid #cbd5e1;border-radius:8px;color:inherit" target="_blank" rel="noopener" href="${esc(r.link)}">🔗 Layout oficial</a>` : ''}
       </div>`;
     $('btnSalvarReg').onclick = () => salvarReg(novo ? null : r);
     if (!novo) $('btnVerCampos').onclick = () => { $('fCampoRep').value = r.cod; trocarAba('campos'); renderCampos(); };
