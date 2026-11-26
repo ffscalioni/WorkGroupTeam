@@ -1,15 +1,62 @@
 <section id="view-hierarquia" class="hidden">
+  <!-- FORMULÁRIO CRUD DE OBJETIVOS ESTRATÉGICOS (CRIAR E EDITAR) -->
   <div class="panel-box">
-    <div class="field"><label>Time</label><select id="novoObjTime"></select></div>
-    <div class="field" style="flex:2;"><label>Novo Objetivo Estratégico</label><input type="text" id="novoObjTitulo"></div>
-    <div class="field"><label>Meta / Indicador</label><input type="text" id="novoObjMeta"></div>
-    <button class="btn-primario" onclick="criarObjetivoUI()">+ Objetivo</button>
+    <div class="panel-title">
+      <span id="tituloFormObjetivo">🎯 Cadastrar Novo Objetivo Estratégico</span>
+    </div>
+    <input type="hidden" id="editObjId" value="">
+    <div class="field">
+      <label>Área / Time</label>
+      <select id="novoObjTime"></select>
+    </div>
+    <div class="field" style="flex:2;min-width:220px;">
+      <label>Título do Objetivo Estratégico</label>
+      <input type="text" id="novoObjTitulo" placeholder="Ex: Escalar automações com IA no time...">
+    </div>
+    <div class="field" style="flex:1.5;">
+      <label>Meta / Indicador de Sucesso</label>
+      <input type="text" id="novoObjMeta" placeholder="Ex: 3 ferramentas em produção">
+    </div>
+    <div class="field">
+      <label>👁️ Visibilidade</label>
+      <select id="novoObjVisibilidade">
+        <option value="PUBLICO">🌐 Público</option>
+        <option value="TIME">🏢 Só o Time</option>
+      </select>
+    </div>
+    <button class="btn-primario" id="btnSalvarObjetivo" onclick="criarOuEditarObjetivoUI()">💾 Salvar Objetivo</button>
+    <button class="tab-btn hidden" id="btnCancelarObjetivo" onclick="limparFormObjetivo()">Cancelar</button>
   </div>
+
+  <!-- FORMULÁRIO CRUD DE PROJETOS / INICIATIVAS (CRIAR E EDITAR) -->
   <div class="panel-box">
-    <div class="field" style="flex:2;"><label>Novo Projeto / Iniciativa</label><input type="text" id="novoPrjNome"></div>
-    <div class="field"><label>Objetivo Vinculado</label><select id="novoPrjObj"></select></div>
-    <div class="field"><label>Líder</label><select id="novoPrjLider"></select></div>
-    <button class="btn-primario" onclick="criarProjetoUI()">+ Projeto</button>
+    <div class="panel-title">
+      <span id="tituloFormProjeto">📁 Cadastrar Novo Projeto / Iniciativa</span>
+    </div>
+    <input type="hidden" id="editPrjId" value="">
+    <div class="field" style="flex:2;min-width:220px;">
+      <label>Nome do Projeto / Iniciativa</label>
+      <input type="text" id="novoPrjNome" placeholder="Ex: Assistente de Leitura de Documentos...">
+    </div>
+    <div class="field" style="flex:1.5;">
+      <label>🎯 Objetivo Estratégico Vinculado</label>
+      <select id="novoPrjObj"></select>
+    </div>
+    <div class="field">
+      <label>👤 Líder do Projeto</label>
+      <select id="novoPrjLider"></select>
+    </div>
+    <div class="field">
+      <label>👁️ Visibilidade</label>
+      <select id="novoPrjVisibilidade">
+        <option value="PUBLICO">🌐 Público</option>
+        <option value="TIME">🏢 Só o Time</option>
+      </select>
+    </div>
+    <button class="btn-primario" id="btnSalvarProjeto" onclick="criarOuEditarProjetoUI()">💾 Salvar Projeto</button>
+    <button class="tab-btn hidden" id="btnCancelarProjeto" onclick="limparFormProjeto()">Cancelar</button>
   </div>
+
+  <!-- ÁRVORE VISUAL COM BOTÕES DE EDITAR (✏️) E EXCLUIR (🗑️) EM CADA OBJETIVO E PROJETO -->
   <div id="containerArvoreObjetivos"></div>
 </section>

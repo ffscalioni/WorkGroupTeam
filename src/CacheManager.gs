@@ -10,17 +10,32 @@ class CacheManager {
   /**
    * Salva uma lista grande de registros dividindo em páginas (chunks) no CacheService.
    */
-  static salvarEntidadePaginada(nomeEntidade, listaCompleta) {
+  /**
+   * @param {string} [chaveVersao] Chave da versão a atualizar. Padrão: versão do Workgroup.
+   *        Cada módulo usa a sua, para que gravar num módulo não force recarga no outro.
+   */
+  static salvarEntidadePaginada(nomeEntidade, listaCompleta, chaveVersao) {
     const cache = CacheService.getScriptCache();
-    const tamanhoPagina = APP_CONFIG.CACHE.PAGE_SIZE_ITEMS;
-    const totalPaginas = Math.max(1, Math.ceil(listaCompleta.length / tamanhoPagina));
     const payloadCache = {};
 
-    for (let p = 0; p < totalPaginas; p++) {
-      const fatia = listaCompleta.slice(p * tamanhoPagina, (p + 1) * tamanhoPagina);
-      const chavePagina = `${APP_CONFIG.CACHE.PREFIX}${nomeEntidade}_P_${p}`;
-      payloadCache[chavePagina] = JSON.stringify(fatia);
-    }
+    // Página fecha em 50 itens OU perto de 90KB, o que vier antes (limite do Google: 100KB por chave)
+    const paginas = [];
+    let atual = [], bytes = 2;
+    listaCompleta.forEach(item => {
+      const tam = JSON.stringify(item).length * 2 + 1; // estimativa conservadora (acentos ocupam mais de 1 byte)
+      if (atual.length && (atual.length >= APP_CONFIG.CACHE.PAGE_SIZE_ITEMS || bytes + tam > APP_CONFIG.CACHE.PAGE_MAX_BYTES)) {
+        paginas.push(atual);
+        atual = []; bytes = 2;
+      }
+      atual.push(item);
+      bytes += tam;
+    });
+    if (atual.length || !paginas.length) paginas.push(atual);
+    const totalPaginas = paginas.length;
+
+    paginas.forEach((fatia, p) => {
+      payloadCache[`${APP_CONFIG.CACHE.PREFIX}${nomeEntidade}_P_${p}`] = JSON.stringify(fatia);
+    });
 
     const chaveMeta = `${APP_CONFIG.CACHE.PREFIX}${nomeEntidade}_META`;
     const versao = new Date().getTime();
@@ -29,7 +44,7 @@ class CacheManager {
       totalPages: totalPaginas,
       updatedAt: versao
     });
-    payloadCache[APP_CONFIG.CACHE.VERSION_KEY] = String(versao);
+    payloadCache[chaveVersao || APP_CONFIG.CACHE.VERSION_KEY] = String(versao);
 
     // Salva todas as páginas de uma só vez na memória RAM do Google
     cache.putAll(payloadCache, APP_CONFIG.CACHE.TTL_SECONDS);
@@ -65,9 +80,9 @@ class CacheManager {
   /**
    * Retorna a versão atual do cache em memória para o Polling leve do navegador.
    */
-  static obterVersaoAtual() {
+  static obterVersaoAtual(chaveVersao) {
     const cache = CacheService.getScriptCache();
-    return cache.get(APP_CONFIG.CACHE.VERSION_KEY) || '0';
+    return cache.get(chaveVersao || APP_CONFIG.CACHE.VERSION_KEY) || '0';
   }
 
   /**

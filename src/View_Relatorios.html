@@ -1,27 +1,44 @@
 <section id="view-relatorios" class="hidden">
+  <!-- CARTÕES DE KPI EXECUTIVOS IGUAIS AO PROTÓTIPO -->
+  <div class="kpi-grid" id="gridKpisRelatorio"></div>
+
+  <!-- 1. RELATÓRIO DE ROTINAS -->
   <div class="panel-box" style="display:block;">
-    <h3 style="margin-top:0;color:var(--primary);">🔄 1. Relatório Gerencial de Rotinas (Feito vs. Pendente)</h3>
+    <h3 style="margin-top:0;color:var(--primary);">🔄 1. Relatório Gerencial de Rotinas Recorrentes (Feito no Ciclo vs. Pendente)</h3>
     <table>
       <thead>
-        <tr><th>Rotina</th><th>Frequência</th><th>Responsável</th><th>Checklist</th><th>Status no Ciclo</th><th>Última Descrição</th></tr>
+        <tr><th>Rotina & Time</th><th>Frequência</th><th>Responsável</th><th>Progresso Checklist</th><th>Status no Ciclo</th><th>Última Descrição Informada</th></tr>
       </thead>
       <tbody id="tbodyRelRotinas"></tbody>
     </table>
   </div>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;">
-    <div class="panel-box" style="display:block;">
-      <h3 style="margin-top:0;color:var(--primary);">🎯 2. Relatório por Objetivo</h3>
+
+  <!-- 2. RELATÓRIOS POR OBJETIVO E POR PROJETO -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:16px;margin-bottom:16px;">
+    <div class="panel-box" style="display:block;margin-bottom:0;">
+      <h3 style="margin-top:0;color:var(--primary);">🎯 2. Relatório Gerencial por Objetivo Estratégico</h3>
       <table>
-        <thead><tr><th>Objetivo</th><th>Tarefas</th><th>Progresso</th></tr></thead>
+        <thead><tr><th>Objetivo & Time</th><th>Meta</th><th>Concluídas</th><th>Progresso</th></tr></thead>
         <tbody id="tbodyRelObjetivos"></tbody>
       </table>
     </div>
-    <div class="panel-box" style="display:block;">
-      <h3 style="margin-top:0;color:var(--primary);">👤 3. Relatório por Indivíduo</h3>
+    <div class="panel-box" style="display:block;margin-bottom:0;">
+      <h3 style="margin-top:0;color:var(--primary);">📁 3. Relatório Gerencial por Projeto / Iniciativa</h3>
       <table>
-        <thead><tr><th>Membro</th><th>Pendentes</th><th>Rotinas</th><th>Entrega (%)</th></tr></thead>
-        <tbody id="tbodyRelIndividuos"></tbody>
+        <thead><tr><th>Projeto & Líder</th><th>Dependências Bloq.</th><th>Entregas</th><th>Progresso</th></tr></thead>
+        <tbody id="tbodyRelProjetos"></tbody>
       </table>
     </div>
+  </div>
+
+  <!-- 4. RELATÓRIO POR INDIVÍDUO -->
+  <div class="panel-box" style="display:block;">
+    <h3 style="margin-top:0;color:var(--primary);">👤 4. Relatório Gerencial por Indivíduo (Alocação em Projetos vs. Rotinas)</h3>
+    <table>
+      <thead>
+        <tr><th>Membro da Equipe</th><th>Time</th><th>Tarefas Abertas</th><th>Rotinas Sob Gestão</th><th>Taxa de Entrega Individual</th></tr>
+      </thead>
+      <tbody id="tbodyRelIndividuos"></tbody>
+    </table>
   </div>
 </section>

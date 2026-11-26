@@ -1,43 +1,65 @@
 <section id="view-rotinas" class="hidden">
+  <!-- CADASTRO DE ROTINA RECORRENTE OU PONTUAL COM DATA DE INÍCIO -->
   <div class="panel-box">
-    <div class="field" style="flex:2;">
-      <label>Título da Nova Rotina Recorrente</label>
-      <input type="text" id="rotTitulo" placeholder="Ex: Conferência Semanal de Modelos e Pipelines">
+    <div class="panel-title">
+      <span>🔄 Cadastrar Rotina para Pessoa (Recorrente ou Pontual)</span>
+      <button class="btn-foco" type="button" onclick="sugerirPassosChecklistIA()">✨ Sugerir Detalhes / Orientação</button>
+    </div>
+    <div class="field" style="flex:2;min-width:220px;">
+      <label>Título da Rotina</label>
+      <input type="text" id="rotTitulo" placeholder="Ex: Conferência de Pipelines / Envio de Report...">
     </div>
     <div class="field">
-      <label>Time</label>
+      <label>Área / Time</label>
       <select id="rotTime"></select>
     </div>
     <div class="field">
-      <label>Responsável</label>
+      <label>👤 Pessoa Responsável</label>
       <select id="rotResponsavel"></select>
     </div>
     <div class="field">
-      <label>Frequência</label>
+      <label>Tipo / Recorrência</label>
       <select id="rotFrequencia">
-        <option value="Diária">Diária</option>
-        <option value="Semanal" selected>Semanal</option>
-        <option value="Mensal">Mensal</option>
+        <option value="Pontual">📌 Pontual (Data Única)</option>
+        <option value="Diária" selected>🔁 Diária (Todo dia)</option>
+        <option value="Semanal">🗓️ Semanal (Toda semana)</option>
+        <option value="Mensal">📆 Mensal (Todo mês)</option>
       </select>
     </div>
     <div class="field">
-      <label>Próxima Data</label>
+      <label>📅 Data de Início / Execução</label>
       <input type="date" id="rotData">
     </div>
-    <div class="field" style="flex:2;">
-      <label>Itens do Checklist (separados por vírgula)</label>
-      <input type="text" id="rotPassos" placeholder="Checar logs, Validar métricas, Enviar resumo">
+    <div class="field" style="flex:2;min-width:240px;">
+      <label>Detalhes / Orientações (Aparece ao passar o mouse)</label>
+      <input type="text" id="rotPassos" placeholder="Descreva o que deve ser verificado nesta rotina...">
     </div>
-    <button class="btn-primario" onclick="salvarNovaRotinaUI()">+ Criar Rotina</button>
+    <button class="btn-primario" onclick="salvarNovaRotinaUI()">+ Agendar Rotina</button>
   </div>
 
-  <div id="gridCardsRotinas" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;margin-bottom:18px;"></div>
+  <!-- BARRA DE SELEÇÃO DE HORIZONTE: HOJE (DEFAULT) | SEMANA (POR DIAS) | MÊS (POR SEMANAS) -->
+  <div class="panel-box" style="background:#eff6ff;border-color:#bfdbfe;justify-content:space-between;align-items:center;">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <strong style="color:#1e40af;font-size:12.5px;">📅 Horizonte de Visualização:</strong>
+      <button class="tab-btn active" id="btnHorizonte-HOJE" style="background:#2563eb;color:#fff;" onclick="mudarHorizonteRotinas('HOJE')">⚡ Rotinas de Hoje (Default)</button>
+      <button class="tab-btn" id="btnHorizonte-SEMANA" onclick="mudarHorizonteRotinas('SEMANA')">🗓️ Da Semana (Separado por Dias)</button>
+      <button class="tab-btn" id="btnHorizonte-MES" onclick="mudarHorizonteRotinas('MES')">📆 Do Mês (Separado por Semanas)</button>
+      <button class="tab-btn" id="btnHorizonte-TODAS" onclick="mudarHorizonteRotinas('TODAS')">📋 Todas</button>
+    </div>
+    <div style="font-size:11.5px;color:#1e40af;font-weight:600;">
+      💡 <em>Passe o mouse sobre a rotina para ver os detalhes · 1º Clique = ☑️ Check · 2º Clique = ✅ Finalizar</em>
+    </div>
+  </div>
 
+  <!-- LISTA AGRUPADA DE ROTINAS (POR DIA OU POR SEMANA) -->
+  <div id="containerListaRotinasAgrupadas" style="margin-bottom:20px;"></div>
+
+  <!-- HISTÓRICO DE EXECUÇÕES -->
   <div class="panel-box" style="display:block;">
-    <h3 style="margin-top:0;color:var(--primary);">📜 Histórico de Atualizações das Rotinas</h3>
+    <h3 style="margin-top:0;color:var(--primary);">📜 Histórico de Rotinas Finalizadas</h3>
     <table>
       <thead>
-        <tr><th>Data/Hora</th><th>Rotina</th><th>Responsável</th><th>Descrição da Atualização</th><th>Checklist</th></tr>
+        <tr><th>Data/Hora</th><th>Rotina</th><th>Responsável</th><th>Observação Registrada</th><th>Status</th></tr>
       </thead>
       <tbody id="tbodyHistoricoRotinas"></tbody>
     </table>

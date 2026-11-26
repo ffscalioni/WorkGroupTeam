@@ -1,12 +1,93 @@
 <section id="view-config" class="hidden">
-  <div class="panel-box">
-    <div class="field"><label>Nome do Novo Time</label><input type="text" id="cfgTimeNome" placeholder="Ex: Finanças & Controle"></div>
-    <div class="field"><label>Sigla</label><input type="text" id="cfgTimeSigla" placeholder="FIN"></div>
-    <div class="field"><label>Cor Hex</label><input type="color" id="cfgTimeCor" value="#0284c7"></div>
-    <button class="btn-primario" onclick="criarTimeUI()">+ Cadastrar Time</button>
+  <!-- BLOCO 1 (EXCLUSIVO ADMIN): AGENDAMENTO DO CACHE DE SERVIDOR DO GOOGLE (A CADA 5 MINUTOS) -->
+  <div id="blocoAdminCache" class="panel-box" style="background:#f0fdf4;border-color:#bbf7d0;">
+    <div class="panel-title">
+      <span style="color:#166534;">⏰ 1. Agendamento do Cache de Memória do Servidor Google (A cada 5 Minutos) [Exclusivo Admin]</span>
+      <span id="badgeStatusTrigger" class="badge" style="background:#dcfce7;color:#15803d;">Verificando...</span>
+    </div>
+    <p style="width:100%;margin:0 0 8px 0;font-size:12px;color:#15803d;">
+      Cadastra nos servidores do Google o acionador automático (<strong>Time-Driven Trigger</strong>) que carrega o JSON paginado no <code>CacheService</code> a cada <strong>5 minutos</strong>.
+    </p>
+    <div class="field">
+      <label>Intervalo do Agendamento no Servidor Google</label>
+      <select id="selIntervaloCache">
+        <option value="1">A cada 1 minuto</option>
+        <option value="5" selected>A cada 5 minutos (Padrão)</option>
+        <option value="10">A cada 10 minutos</option>
+        <option value="15">A cada 15 minutos</option>
+        <option value="30">A cada 30 minutos</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Última Carga Automática na RAM do Google</label>
+      <input type="text" id="txtUltimoWarmup" readonly value="Carregando...">
+    </div>
+    <button class="btn-primario" style="background:#16a34a;" onclick="salvarAgendamentoCacheUI()">
+      ⚡ Ativar Agendamento de 5 Minutos no Servidor Google
+    </button>
   </div>
-  <div class="panel-box" style="display:block;">
-    <h3 style="margin-top:0;">🏢 Times Cadastrados na Base</h3>
-    <div id="listaTimesConfig"></div>
+
+  <!-- BLOCO 2 (EXCLUSIVO ADMIN): PRESETS AUTOMÁTICOS E GEMINI =AI() NA PLANILHA -->
+  <div id="blocoAdminPresets" class="panel-box" style="background:#eff6ff;border-color:#bfdbfe;">
+    <div class="panel-title">
+      <span style="color:#1e40af;">🚀 2. Presets de Áreas de Negócio & Integração Gemini Nativo (=AI no Sheets) [Exclusivo Admin]</span>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;width:100%;justify-content:space-between;align-items:center;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn-primario" style="background:#0284c7;" onclick="aplicarPresetUI('CONTABIL')">📊 + Preset Fechamento Contábil</button>
+        <button class="btn-primario" style="background:#0d9488;" onclick="aplicarPresetUI('ONBOARDING')">🤝 + Preset Onboarding & KYC</button>
+        <button class="btn-primario" style="background:#e11d48;" onclick="aplicarPresetUI('UAT')">🛠️ + Preset Ambientes UAT / QA</button>
+      </div>
+      <button class="btn-primario" style="background:#7c3aed;" onclick="gerarFormulaGeminiPlanilhaUI()">
+        ✨ Gerar Resumo com Fórmula =AI() Gemini na Planilha
+      </button>
+    </div>
+  </div>
+
+  <!-- BLOCO 3: GESTÃO DE ÁREAS (TIMES) E GESTÃO DE USUÁRIOS (MEMBROS COM PERFIS ADMIN, GESTOR, TIME) -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));gap:16px;">
+    
+    <!-- CADASTRO / EDIÇÃO / EXCLUSÃO DE ÁREAS (TIMES) -->
+    <div id="blocoAdminTimes" class="panel-box" style="display:block;">
+      <h3 style="margin-top:0;color:var(--primary);" id="tituloFormTime">🏢 Cadastrar / Editar Área (Time)</h3>
+      <input type="hidden" id="cfgTimeIdEdicao" value="">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;">
+        <div class="field"><label>Nome da Área / Time</label><input type="text" id="cfgTimeNome" placeholder="Ex: Data Engineering"></div>
+        <div class="field" style="max-width:110px;"><label>Sigla</label><input type="text" id="cfgTimeSigla" placeholder="DATA"></div>
+        <div class="field" style="max-width:75px;"><label>Cor</label><input type="color" id="cfgTimeCor" value="#2563eb" style="height:36px;padding:2px;"></div>
+        <button class="btn-primario" id="btnSalvarTime" onclick="criarOuEditarTimeUI()">💾 Salvar Área</button>
+        <button class="tab-btn hidden" id="btnCancelarEdicaoTime" onclick="limparFormTime()">Cancelar</button>
+      </div>
+      <table>
+        <thead><tr><th>Sigla & Cor</th><th>Nome da Área / Time</th><th>Ações</th></tr></thead>
+        <tbody id="tbodyTimesConfig"></tbody>
+      </table>
+    </div>
+
+    <!-- CADASTRO / EDIÇÃO / EXCLUSÃO DE USUÁRIOS (ADMIN E GESTOR PODEM EDITAR) -->
+    <div id="blocoGestorUsuarios" class="panel-box" style="display:block;">
+      <h3 style="margin-top:0;color:var(--primary);" id="tituloFormMembro">👤 Cadastrar / Editar Usuário (Conta Google & Perfil)</h3>
+      <input type="hidden" id="cfgMemIdEdicao" value="">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;">
+        <div class="field"><label>Nome (Exibição)</label><input type="text" id="cfgMemNome" placeholder="Ex: Beatriz (Data)"></div>
+        <div class="field"><label>E-mail Conta Google</label><input type="email" id="cfgMemEmail" placeholder="beatriz@empresa.com"></div>
+        <div class="field"><label>Área / Time</label><select id="cfgMemTime"></select></div>
+        <div class="field">
+          <label>Perfil de Acesso</label>
+          <select id="cfgMemPerfil">
+            <option value="TIME">👷 Time (Quadro, Rotinas e Objetivos)</option>
+            <option value="GESTOR">📊 Gestor (+ Relatórios e Editar Usuários)</option>
+            <option value="ADMIN">👑 Admin (Acesso Total & Configurações)</option>
+          </select>
+        </div>
+        <button class="btn-primario" id="btnSalvarMembro" onclick="criarOuEditarMembroUI()">💾 Salvar Usuário</button>
+        <button class="tab-btn hidden" id="btnCancelarEdicaoMembro" onclick="limparFormMembro()">Cancelar</button>
+      </div>
+      <table>
+        <thead><tr><th>Usuário</th><th>E-mail Google</th><th>Área</th><th>Perfil</th><th>Ações</th></tr></thead>
+        <tbody id="tbodyMembrosConfig"></tbody>
+      </table>
+    </div>
+
   </div>
 </section>

@@ -27,6 +27,10 @@ class NotificationService {
       return { enviados: 0, aviso: 'Reserva mínima de cota de e-mail atingida.' };
     }
 
+    // O corpo do e-mail é HTML: títulos e nomes digitados por usuários precisam de escape
+    const esc = v => String(v === undefined || v === null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
     let enviados = 0;
     dependentes.forEach(dep => {
       const membro = todosMembros.find(m => m.Nome_Exibicao === dep.Responsavel);
@@ -38,9 +42,9 @@ class NotificationService {
             htmlBody: `
               <div style="font-family:Arial,sans-serif;padding:16px;border:1px solid #e2e8f0;border-radius:8px;">
                 <h3 style="color:#2563eb;margin-top:0;">🔓 Dependência Concluída!</h3>
-                <p>Olá, <strong>${membro.Nome_Exibicao}</strong>!</p>
-                <p>A atividade predecessora <strong>${idTarefaConcluida}</strong> acabou de ser concluída.</p>
-                <p>Sua atividade <strong>[${dep.ID_Tarefa}] ${dep.Titulo_Tarefa}</strong> já está liberada para execução.</p>
+                <p>Olá, <strong>${esc(membro.Nome_Exibicao)}</strong>!</p>
+                <p>A atividade predecessora <strong>${esc(idTarefaConcluida)}</strong> acabou de ser concluída.</p>
+                <p>Sua atividade <strong>[${esc(dep.ID_Tarefa)}] ${esc(dep.Titulo_Tarefa)}</strong> já está liberada para execução.</p>
               </div>
             `
           });

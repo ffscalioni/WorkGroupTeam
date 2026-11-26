@@ -1,7 +1,53 @@
 <section id="view-kanban">
-  <div class="panel-box" style="background:#eff6ff;">
+  <!-- BARRA DE INCLUSÃO RÁPIDA DE ATIVIDADE (AGORA COM CAMPO DE OBJETIVO EXPLÍCITO) -->
+  <div class="panel-box">
+    <div class="panel-title">
+      <span>⚡ Inclusão Fluida de Atividade no Quadro</span>
+      <span style="font-size:11px;color:var(--muted);font-weight:600;">💡 Dica: Arraste os cartões com o mouse entre as colunas para mudar o status!</span>
+    </div>
+    <div class="field" style="flex: 2; min-width: 210px;">
+      <label>O que precisa ser feito?</label>
+      <input type="text" id="quickTitulo" placeholder="Ex: Homologar pipeline de dados / Revisar indicadores...">
+    </div>
     <div class="field">
-      <label>🏷️ Filtrar por Time</label>
+      <label>🎯 Objetivo da Atividade</label>
+      <select id="quickObjetivo" onchange="aoMudarObjetivoQuick()"></select>
+    </div>
+    <div class="field">
+      <label>📁 Projeto / Iniciativa</label>
+      <select id="quickProjeto"></select>
+    </div>
+    <div class="field">
+      <label>👤 Responsável</label>
+      <select id="quickResponsavel"></select>
+    </div>
+    <div class="field">
+      <label>Início / Agendamento</label>
+      <input type="date" id="quickInicio">
+    </div>
+    <div class="field">
+      <label>Prazo</label>
+      <input type="date" id="quickPrazo">
+    </div>
+    <div class="field">
+      <label>⛓️ Depende de:</label>
+      <select id="quickDependencia"></select>
+    </div>
+    <div class="field">
+      <label>👁️ Visibilidade</label>
+      <select id="quickVisibilidade">
+        <option value="PUBLICO">🌐 Público</option>
+        <option value="TIME">🏢 Só o Time</option>
+        <option value="RESTRITO">🔒 Restrito</option>
+      </select>
+    </div>
+    <button class="btn-primario" onclick="criarTarefaRapidaBarra()">+ Incluir Rápido</button>
+  </div>
+
+  <!-- BARRA DE FILTROS INTELIGENTES -->
+  <div class="panel-box" style="background:#eff6ff;border-color:#bfdbfe;">
+    <div class="field">
+      <label>🏷️ Filtrar por Área / Time</label>
       <select id="filtroTimeKanban" onchange="renderizarInterface()"></select>
     </div>
     <div class="field">
@@ -9,14 +55,20 @@
       <select id="filtroObjetivoKanban" onchange="renderizarInterface()"></select>
     </div>
     <div class="field">
+      <label>📁 Filtrar por Projeto</label>
+      <select id="filtroProjetoKanban" onchange="renderizarInterface()"></select>
+    </div>
+    <div class="field">
       <label>🗓️ Agendamento / Dependências</label>
       <select id="filtroAgendamentoKanban" onchange="renderizarInterface()">
         <option value="TODAS">Todas as Atividades</option>
-        <option value="HOJE">⚡ Ativas Hoje</option>
-        <option value="FUTURAS">🗓️ Agendadas p/ Data Futura</option>
-        <option value="DEPENDENCIA">⛓️ Com Dependência</option>
+        <option value="HOJE">⚡ Apenas Ativas Hoje (Ocultar Futuras)</option>
+        <option value="FUTURAS">🗓️ Apenas Programadas p/ Data Futura</option>
+        <option value="DEPENDENCIA">⛓️ Com Dependência Vinculada</option>
       </select>
     </div>
   </div>
+
+  <!-- COLUNAS DO KANBAN COM SUPORTE A DRAG & DROP -->
   <div class="kanban-grid" id="containerColunasKanban"></div>
 </section>
