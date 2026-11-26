@@ -20,6 +20,8 @@ const DD_CONFIG = Object.freeze({
   PROP_ID: 'DD_SPREADSHEET_ID',
   // Última atualização da carga inicial já aplicada numa planilha existente (ver ddAplicarAtualizacao_)
   PROP_VERSAO_CARGA: 'DD_VERSAO_CARGA',
+  // Registros excluídos pela tela, por aba (DD_EXCLUIDOS_<aba>): uma nova revisão da carga inicial não os traz de volta
+  PROP_EXCLUIDOS: 'DD_EXCLUIDOS_',
   // Versão própria do cache do Dicionário: gravar aqui não força recarga no Workgroup (e vice-versa)
   VERSION_KEY: 'HUB_V4_DD_VER',
   SHEETS: Object.freeze({
@@ -53,6 +55,58 @@ function ddObterPlanilha_() {
   return nova;
 }
 
+/* ===================== REGISTROS EXCLUÍDOS PELA TELA ===================== */
+
+/** Lê, por aba, os códigos excluídos pela tela: { DD_Campos: { 'DD-201': true }, ... }. */
+function ddLerExcluidos_() {
+  const props = PropertiesService.getScriptProperties();
+  const exc = {};
+  Object.values(DD_CONFIG.SHEETS).forEach(nomeAba => {
+    exc[nomeAba] = {};
+    String(props.getProperty(DD_CONFIG.PROP_EXCLUIDOS + nomeAba) || '').split(',')
+      .filter(Boolean).forEach(id => { exc[nomeAba][id] = true; });
+  });
+  return exc;
+}
+
+/**
+ * Guarda os códigos excluídos de uma aba. Só os itens excluídos diretamente entram aqui:
+ * os removidos em cascata (campos de um regulatório, checks e lineage de um campo) são
+ * reconhecidos por ddFoiExcluido_ pelo regulatório ou pelo campo.
+ */
+function ddMarcarExcluidos_(nomeAba, ids) {
+  const props = PropertiesService.getScriptProperties();
+  const chave = DD_CONFIG.PROP_EXCLUIDOS + nomeAba;
+  const atuais = String(props.getProperty(chave) || '').split(',').filter(Boolean);
+  ids.map(String).forEach(id => { if (atuais.indexOf(id) === -1) atuais.push(id); });
+  try {
+    props.setProperty(chave, atuais.join(','));
+  } catch (e) {
+    // Limite de 9 KB por propriedade: a exclusão vale mesmo assim; só uma nova carga inicial poderia trazer o item de volta
+    console.warn('Não foi possível registrar os excluídos de ' + nomeAba + ': ' + e.message);
+  }
+}
+
+/** Um registro recriado com o mesmo código deixa de constar como excluído. */
+function ddDesmarcarExcluido_(nomeAba, id) {
+  const props = PropertiesService.getScriptProperties();
+  const chave = DD_CONFIG.PROP_EXCLUIDOS + nomeAba;
+  const atuais = String(props.getProperty(chave) || '').split(',').filter(Boolean);
+  const pos = atuais.indexOf(String(id));
+  if (pos === -1) return;
+  atuais.splice(pos, 1);
+  props.setProperty(chave, atuais.join(','));
+}
+
+/** O registro da carga inicial foi excluído pela tela (ele próprio, o seu regulatório ou o seu campo)? */
+function ddFoiExcluido_(nomeAba, registro, exc) {
+  const s = DD_CONFIG.SHEETS;
+  if (exc[nomeAba][String(registro[DD_CONFIG.CHAVES[nomeAba]])]) return true;
+  if (nomeAba !== s.REGS && registro.codReporte && exc[s.REGS][String(registro.codReporte)]) return true;
+  if ((nomeAba === s.CHECKS || nomeAba === s.LINEAGE) && registro.idCampo && exc[s.CAMPOS][String(registro.idCampo)]) return true;
+  return false;
+}
+
 /** Carga inicial: DD_SEED_DADOS_ é gerada pelo build.js a partir do bloco DD_SEED de Dicionario.html. */
 function ddLerSeed_() {
   if (typeof DD_SEED_DADOS_ !== 'undefined') return DD_SEED_DADOS_;
@@ -76,6 +130,7 @@ function ddAplicarAtualizacao_(ss) {
   {
     const s = DD_CONFIG.SHEETS;
     const listaSeed = { DD_Regulatorios: seed.regs, DD_Campos: seed.campos, DD_Quality_Checks: seed.checks, DD_Lineage: seed.lineage };
+    const exc = ddLerExcluidos_();
     Object.values(s).forEach(nomeAba => {
       const sheet = ss.getSheetByName(nomeAba);
       if (!sheet) return;
@@ -97,6 +152,7 @@ function ddAplicarAtualizacao_(ss) {
         const pos = {};
         linhas.forEach((l, i) => { pos[String(l[iChave])] = i; });
         listaSeed[nomeAba].forEach(o => {
+          if (ddFoiExcluido_(nomeAba, o, exc)) return; // excluído pela tela: não volta
           const k = String(o[chave]);
           if (pos[k] !== undefined) {
             colunas.forEach(c => { linhas[pos[k]][cab.indexOf(c)] = o[c] === undefined ? '' : String(o[c]); });
@@ -120,7 +176,7 @@ function ddAplicarAtualizacao_(ss) {
 function ddInicializar_() {
   const ss = ddObterPlanilha_();
   const s = DD_CONFIG.SHEETS;
-  let seed = null, carregou = false;
+  let seed = null, exc = null, carregou = false;
   [[s.REGS, 'regs'], [s.CAMPOS, 'campos'], [s.CHECKS, 'checks'], [s.LINEAGE, 'lineage']].forEach(par => {
     const nomeAba = par[0];
     const cab = DD_CONFIG.HEADERS[nomeAba];
@@ -134,7 +190,9 @@ function ddInicializar_() {
       sheet.setFrozenRows(1);
     }
     seed = seed || ddLerSeed_();
-    const linhas = (seed[par[1]] || []).map(o => cab.map(c => (o[c] === undefined || o[c] === null) ? '' : String(o[c])));
+    exc = exc || ddLerExcluidos_();
+    const linhas = (seed[par[1]] || []).filter(o => !ddFoiExcluido_(nomeAba, o, exc))
+      .map(o => cab.map(c => (o[c] === undefined || o[c] === null) ? '' : String(o[c])));
     if (linhas.length) {
       // Formato texto evita que códigos como "2061" ou "DD-001" sejam convertidos pelo Sheets
       sheet.getRange(2, 1, linhas.length, cab.length).setNumberFormat('@').setValues(linhas);
@@ -216,6 +274,7 @@ function ddGravar_(nomeAba, registro) {
     const linha = cab.map((c, i) => registro[c] === undefined && idx > -1 ? String(atual[i]) : texto_(registro[c], 2000));
     const salvo = {};
     cab.forEach((c, i) => { salvo[c] = linha[i]; });
+    if (idx === -1) ddDesmarcarExcluido_(nomeAba, salvo[chave]);
 
     // PASSO 1: Cache de Memória do Servidor (RAM)
     const lista = ddLerComCache_(nomeAba);
@@ -259,30 +318,62 @@ function apiDDVerificarVersaoCache() {
 }
 
 /**
- * EXCLUSÃO EM ORDEM ESTRITA:
+ * EXCLUSÃO EM ORDEM ESTRITA, de um ou vários registros em uma ou mais abas:
  * 1º Remove do Cache de Memória do Servidor (CacheService).
- * 2º Remove a linha na Planilha Google (Sheets), pela chave da 1ª coluna.
+ * 2º Remove as linhas na Planilha Google (Sheets).
+ * @param {Object} filtros { nomeAba: função(registro) -> true se deve sair }
+ * @param {Object} diretos { nomeAba: [códigos] } excluídos diretamente, para a carga inicial não trazê-los de volta
+ * @return {{ok: boolean, versaoCache: number, removidos: Object}} removidos = quantidade por aba
  */
-function ddExcluir_(nomeAba, idRegistro) {
+function ddExcluirVarios_(filtros, diretos) {
   const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  lock.waitLock(20000);
   try {
-    const chave = DD_CONFIG.CHAVES[nomeAba];
+    const ss = ddInicializar_();
+    Object.keys(diretos || {}).forEach(nomeAba => ddMarcarExcluidos_(nomeAba, diretos[nomeAba]));
 
     // PASSO 1: Cache de Memória do Servidor (RAM)
-    const lista = ddLerComCache_(nomeAba).filter(item => String(item[chave]) !== String(idRegistro));
-    const versao = CacheManager.salvarEntidadePaginada(nomeAba, lista, DD_CONFIG.VERSION_KEY);
+    const removidos = {};
+    const codigos = {};
+    let versao = CacheManager.obterVersaoAtual(DD_CONFIG.VERSION_KEY);
+    Object.keys(filtros).forEach(nomeAba => {
+      const chave = DD_CONFIG.CHAVES[nomeAba];
+      const lista = ddLerComCache_(nomeAba);
+      const sai = lista.filter(filtros[nomeAba]);
+      removidos[nomeAba] = sai.length;
+      if (!sai.length) return;
+      codigos[nomeAba] = {};
+      sai.forEach(item => { codigos[nomeAba][String(item[chave])] = true; });
+      versao = CacheManager.salvarEntidadePaginada(nomeAba, lista.filter(item => !codigos[nomeAba][String(item[chave])]), DD_CONFIG.VERSION_KEY);
+    });
 
     // PASSO 2: Planilha Google (Persistência Física)
-    const sheet = ddInicializar_().getSheetByName(nomeAba);
-    const ids = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues().map(r => String(r[0])) : [];
-    const idx = ids.indexOf(String(idRegistro));
-    if (idx > -1) sheet.deleteRow(idx + 2);
+    // Regrava a aba de uma vez: apagar centenas de linhas uma a uma (cascata de um regulatório) seria lento demais
+    Object.keys(codigos).forEach(nomeAba => {
+      const sheet = ss.getSheetByName(nomeAba);
+      if (!sheet || sheet.getLastRow() <= 1) return;
+      const valores = sheet.getDataRange().getValues();
+      const iChave = valores[0].map(String).indexOf(DD_CONFIG.CHAVES[nomeAba]);
+      const manter = valores.slice(1).filter(l => String(l[0]) !== '' && !codigos[nomeAba][String(l[iChave])]);
+      if (manter.length === valores.length - 1) return;
+      sheet.getRange(2, 1, valores.length - 1, valores[0].length).clearContent();
+      if (manter.length) sheet.getRange(2, 1, manter.length, valores[0].length).setNumberFormat('@').setValues(manter);
+    });
     SpreadsheetApp.flush();
-    return { ok: true, versaoCache: versao };
+    return { ok: true, versaoCache: versao, removidos };
   } finally {
     lock.releaseLock();
   }
+}
+
+/** Exclusão de um único registro pelo código (data quality check ou passo de lineage). */
+function ddExcluir_(nomeAba, idRegistro) {
+  const chave = DD_CONFIG.CHAVES[nomeAba];
+  const filtros = {};
+  filtros[nomeAba] = item => String(item[chave]) === String(idRegistro);
+  const diretos = {};
+  diretos[nomeAba] = [String(idRegistro)];
+  return ddExcluirVarios_(filtros, diretos);
 }
 
 /** Cadastro/edição de regulatório (inventário). Somente Gestor ou Admin. */
@@ -303,6 +394,47 @@ function apiDDSalvarCampo(campo) {
   if (!texto_(campo.dado, 300)) throw new Error('Informe o nome do dado.');
   campo.cde = campo.cde === 'Sim' ? 'Sim' : 'Não';
   return ddGravar_(DD_CONFIG.SHEETS.CAMPOS, campo);
+}
+
+/**
+ * Exclui um campo junto com os seus data quality checks e o seu lineage. Somente Gestor ou Admin.
+ */
+function apiDDExcluirCampo(idCampo) {
+  AuthService.exigirPerfil(AuthService.obterContexto(), ['ADMIN', 'GESTOR']);
+  const id = String(idCampo || '');
+  if (!/^DD-[A-Za-z0-9-]{1,20}$/.test(id)) throw new Error('Identificador do campo inválido.');
+  const s = DD_CONFIG.SHEETS;
+  if (!ddLerComCache_(s.CAMPOS).some(c => String(c.id) === id)) throw new Error('Campo não encontrado: ' + id);
+  const filtros = {};
+  filtros[s.CAMPOS] = c => String(c.id) === id;
+  filtros[s.CHECKS] = k => String(k.idCampo) === id;
+  filtros[s.LINEAGE] = l => String(l.idCampo) === id;
+  const diretos = {};
+  diretos[s.CAMPOS] = [id];
+  return ddExcluirVarios_(filtros, diretos);
+}
+
+/**
+ * Exclui um regulatório junto com todos os seus campos e, deles, os data quality checks e o lineage.
+ * Somente Gestor ou Admin.
+ */
+function apiDDExcluirRegulatorio(codReporte) {
+  AuthService.exigirPerfil(AuthService.obterContexto(), ['ADMIN', 'GESTOR']);
+  const cod = String(codReporte || '');
+  if (!/^[A-Za-z0-9_.-]{1,20}$/.test(cod)) throw new Error('Código do regulatório inválido.');
+  const s = DD_CONFIG.SHEETS;
+  if (!ddLerComCache_(s.REGS).some(r => String(r.cod) === cod)) throw new Error('Regulatório não encontrado: ' + cod);
+  const idsCampos = {};
+  ddLerComCache_(s.CAMPOS).forEach(c => { if (String(c.codReporte) === cod) idsCampos[String(c.id)] = true; });
+  const doReporte = item => String(item.codReporte) === cod || !!idsCampos[String(item.idCampo)];
+  const filtros = {};
+  filtros[s.REGS] = r => String(r.cod) === cod;
+  filtros[s.CAMPOS] = c => !!idsCampos[String(c.id)];
+  filtros[s.CHECKS] = doReporte;
+  filtros[s.LINEAGE] = doReporte;
+  const diretos = {};
+  diretos[s.REGS] = [cod];
+  return ddExcluirVarios_(filtros, diretos);
 }
 
 /** Data quality check (texto descritivo) de um campo. Qualquer membro cadastrado. */

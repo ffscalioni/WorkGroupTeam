@@ -27,6 +27,8 @@
   textarea{min-height:58px;resize:vertical}
   button.pri{background:var(--primary);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer;font-size:12.5px}
   button.sec{background:#fff;color:var(--text);border:1px solid #cbd5e1;border-radius:8px;padding:7px 12px;cursor:pointer;font-size:12.5px}
+  button.dan{background:#fff;color:var(--danger);border:1px solid #fecaca;border-radius:8px;padding:7px 12px;cursor:pointer;font-size:12.5px;font-weight:600}
+  button.dan:hover{background:#fef2f2}
   button:disabled{opacity:.5;cursor:not-allowed}
   .tblwrap{overflow:auto;max-height:62vh;border:1px solid var(--border);border-radius:10px}
   table{border-collapse:collapse;width:100%}
@@ -323,8 +325,10 @@
         <button class="pri" id="btnSalvarReg" ${ro}>💾 Salvar regulatório</button>
         ${novo ? '' : '<button class="sec" id="btnVerCampos">🧬 Ver campos deste reporte</button>'}
         ${!novo && r.link && /^https?:\/{2}/.test(r.link) ? `<a class="sec" style="text-decoration:none;padding:7px 12px;border:1px solid #cbd5e1;border-radius:8px;color:inherit" target="_blank" rel="noopener" href="${esc(r.link)}">🔗 Layout oficial</a>` : ''}
+        ${!novo && DD.podeEditar ? '<button class="dan" id="btnExcluirReg" style="margin-left:auto">🗑️ Excluir regulatório</button>' : ''}
       </div>`;
     $('btnSalvarReg').onclick = () => salvarReg(novo ? null : r);
+    if ($('btnExcluirReg')) $('btnExcluirReg').onclick = () => excluirReg(r);
     if (!novo) $('btnVerCampos').onclick = () => { fecharModal('mdReg'); $('fCampoRep').value = r.cod; trocarAba('campos'); renderCampos(); };
     abrirModal('mdReg');
     renderRegs();
@@ -340,6 +344,22 @@
     regSel = reg.cod;
     chamar('apiDDSalvarRegulatorio', reg);
     fecharModal('mdReg'); iniciarTela(); toast('Regulatório salvo.');
+  }
+  /** Exclui o regulatório e, em cascata, os seus campos com os data quality checks e o lineage deles. */
+  function excluirReg(r) {
+    const idsCampos = {};
+    DD.campos.forEach(c => { if (c.codReporte === r.cod) idsCampos[c.id] = true; });
+    const doReporte = x => x.codReporte === r.cod || !!idsCampos[x.idCampo];
+    const nCampos = Object.keys(idsCampos).length, nChecks = DD.checks.filter(doReporte).length, nLin = DD.lineage.filter(doReporte).length;
+    if (!confirm(`Excluir o regulatório ${r.cod} — ${r.nome}?\n\n` +
+      `Também serão excluídos ${nCampos} campo(s), ${nChecks} data quality check(s) e ${nLin} passo(s) de lineage.\n\n` +
+      'Não há como desfazer pela tela.')) return;
+    DD.regs = DD.regs.filter(x => x.cod !== r.cod);
+    DD.campos = DD.campos.filter(c => !idsCampos[c.id]);
+    DD.checks = DD.checks.filter(k => !doReporte(k));
+    DD.lineage = DD.lineage.filter(l => !doReporte(l));
+    chamar('apiDDExcluirRegulatorio', r.cod);
+    fecharModal('mdReg'); iniciarTela(); toast(`Regulatório ${r.cod} excluído.`);
   }
 
   /* ---------- ABA 2: campos, lineage e data quality ---------- */
@@ -462,7 +482,10 @@
       <div class="f" style="margin-bottom:8px"><label>Origem do campo no ADA (coluna do Matera usada pelo KBTQ/KSAN)</label><input id="c_origemAda" value="${esc(c.origemAda || '')}" ${ro}></div>
       <div class="f" style="margin-bottom:8px"><label>Observações e anotações de reunião</label>
         <textarea id="c_observacoes" ${ro}>${esc(c.observacoes || '')}</textarea></div>
-      <button class="pri" id="btnSalvarCampo" ${ro}>💾 Salvar campo</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="pri" id="btnSalvarCampo" ${ro}>💾 Salvar campo</button>
+        ${!novo && DD.podeEditar ? '<button class="dan" id="btnExcluirCampo" style="margin-left:auto">🗑️ Excluir campo</button>' : ''}
+      </div>
       ${novo ? '' : `
       <div class="sec-t">Data quality checks (${ks.length})</div>
       <div id="listaChecks">${ks.map(k => `
@@ -481,6 +504,7 @@
         <textarea id="k_descricao" placeholder="Descreva em texto o que este check valida e como..."></textarea></div>
       <button class="pri" id="btnAddCheck">+ Adicionar data quality check</button>`}`;
     $('btnSalvarCampo').onclick = () => salvarCampo(c, novo);
+    if ($('btnExcluirCampo')) $('btnExcluirCampo').onclick = () => excluirCampo(c);
     if (!novo) {
       if ($('btnAddLin')) $('btnAddLin').onclick = () => adicionarLineage(c);
       $('listaLineage').onclick = ev => {
@@ -513,6 +537,18 @@
     if (novo) { c.status = 'Cadastrado manualmente'; DD.campos.push(c); }
     chamar('apiDDSalvarCampo', c);
     fecharModal('mdCampo'); iniciarTela(); toast('Campo salvo.');
+  }
+  /** Exclui o campo e, em cascata, os seus data quality checks e o seu lineage. */
+  function excluirCampo(c) {
+    const nChecks = checksDoCampo(c).length, nLin = lineageDoCampo(c).length;
+    if (!confirm(`Excluir o campo ${c.id} — ${c.dado}?\n\n` +
+      `Também serão excluídos ${nChecks} data quality check(s) e ${nLin} passo(s) de lineage deste campo.\n\n` +
+      'Não há como desfazer pela tela.')) return;
+    DD.campos = DD.campos.filter(x => x.id !== c.id);
+    DD.checks = DD.checks.filter(k => k.idCampo !== c.id);
+    DD.lineage = DD.lineage.filter(l => l.idCampo !== c.id);
+    chamar('apiDDExcluirCampo', c.id);
+    fecharModal('mdCampo'); iniciarTela(); toast(`Campo ${c.id} excluído.`);
   }
   function adicionarLineage(c) {
     const sistema = $('l_sistema').value.trim();
