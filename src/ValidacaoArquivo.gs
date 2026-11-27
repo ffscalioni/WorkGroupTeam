@@ -6,7 +6,10 @@
  *
  *   - O XML é lido e validado SÓ NO NAVEGADOR (em partes): o arquivo nunca
  *     sobe para o servidor. Aqui chegam apenas as regras e o resumo do resultado.
- *   - Regras executáveis: coluna regraExec de DD_Quality_Checks (JSON).
+ *   - Regras executáveis: coluna regraExec de DD_Quality_Checks (JSON). Versão 2: expressões
+ *     (escopo, filtro, teste/unico/grupo) avaliadas no navegador por um interpretador próprio, sem eval.
+ *     A versão 1 (tipo/elemento/atributo) continua aceita.
+ *   - Só os data quality checks de campos CDE entram na validação.
  *   - Cada validação registrada gera um PDF no Drive, na pasta
  *     "DD - Validações de Arquivos Regulatórios", e uma linha na aba DD_Validacoes
  *     da planilha do Dicionário.
@@ -22,16 +25,19 @@ const VAL_CONFIG = Object.freeze({
   PROP_PASTA: 'DD_VAL_PASTA_ID',
   HEADERS: ['id', 'dataHora', 'usuario', 'codReporte', 'arquivo', 'tamanhoBytes', 'dtBase', 'totalRegistros',
     'regrasExecutadas', 'regrasComErro', 'regrasNaoExecutadas', 'totalOcorrencias', 'status', 'pdfUrl', 'pdfId'],
-  // Tipos de regra executável aceitos (o motor fica em Dicionario.html)
+  // Tipos de regra executável da versão 1 (o motor fica em Dicionario.html)
   TIPOS: Object.freeze(['obrigatorio', 'dominio', 'regex', 'data', 'numero', 'tamanho', 'digitos', 'unico', 'manual']),
-  MAX_REGRAS_RESUMO: 600,
-  MAX_EXEMPLOS: 5
+  STATUS: Object.freeze(['OK', 'FALHA', 'ALERTA', 'N/A', 'ERRO', 'NÃO EXECUTADA']),
+  MAX_VERIFICACOES: 600,
+  MAX_CATALOGO: 1500,
+  MAX_EXEMPLOS: 10
 });
 
 /* ============================ REGRAS EXECUTÁVEIS ============================ */
 
 /**
- * Valida e normaliza uma regra executável (objeto ou lista de objetos; todas precisam passar).
+ * Valida e normaliza uma regra executável: objeto ou lista (até 10 partes), versão 1 (tipo/elemento/atributo)
+ * ou versão 2 (expressões). As expressões só são interpretadas no navegador; aqui valida forma e tamanho.
  * Retorna o JSON normalizado (texto) ou '' para limpar a regra.
  */
 function valNormalizarRegra_(regra) {
@@ -40,16 +46,42 @@ function valNormalizarRegra_(regra) {
     try { regra = JSON.parse(regra); } catch (e) { throw new Error('Regra executável não é um JSON válido.'); }
   }
   const lista = Array.isArray(regra) ? regra : [regra];
-  if (!lista.length || lista.length > 10) throw new Error('A regra deve ter de 1 a 10 condições.');
+  if (!lista.length || lista.length > 10) throw new Error('A regra deve ter de 1 a 10 partes.');
   const nomeOk = v => /^[A-Za-z_][A-Za-z0-9_]{0,40}$/.test(String(v || ''));
+  const expr = (v, campo) => {
+    const s = String(v);
+    if (s.length > 1000) throw new Error('Expressão muito longa em ' + campo + ' (máx. 1000 caracteres).');
+    return s;
+  };
   const limpa = lista.map(r => {
     if (!r || typeof r !== 'object') throw new Error('Regra executável inválida.');
+    if (r.manual === true || r.tipo === 'manual') {
+      return Number(r.v) === 2 ? { v: 2, manual: true, categoria: texto_(r.categoria || 'Sem regra definida', 60), motivo: texto_(r.motivo, 300) }
+        : { tipo: 'manual', motivo: texto_(r.motivo, 300) };
+    }
+    if (Number(r.v) === 2) {
+      const o = { v: 2 };
+      ['nome', 'entidade', 'esperado', 'nota'].forEach(k => { if (r[k] !== undefined && r[k] !== '') o[k] = texto_(r[k], k === 'nota' ? 400 : 200); });
+      o.escopo = r.escopo === undefined || r.escopo === '' ? '*' : String(r.escopo);
+      if (o.escopo !== '*' && !nomeOk(o.escopo)) throw new Error('Escopo inválido na regra: ' + o.escopo);
+      if (r.atributo !== undefined && r.atributo !== '') {
+        if (!nomeOk(r.atributo)) throw new Error('Atributo do XML inválido na regra.');
+        o.atributo = String(r.atributo);
+      }
+      if (o.escopo === '*' && !o.atributo) throw new Error('Com escopo "*" informe o atributo.');
+      ['filtro', 'teste', 'unico', 'chave', 'encontrado'].forEach(k => { if (r[k] !== undefined && r[k] !== '') o[k] = expr(r[k], k); });
+      if (r.grupo) {
+        if (!r.grupo.por || !r.grupo.conta) throw new Error('O grupo precisa de "por" e "conta".');
+        o.grupo = { por: expr(r.grupo.por, 'grupo.por'), conta: expr(r.grupo.conta, 'grupo.conta') };
+      }
+      if (!o.teste && !o.unico) throw new Error('Informe "teste" ou "unico" na regra.');
+      return o;
+    }
     const tipo = String(r.tipo || '');
     if (VAL_CONFIG.TIPOS.indexOf(tipo) === -1) throw new Error('Tipo de regra desconhecido: ' + tipo);
-    if (tipo === 'manual') return { tipo, motivo: texto_(r.motivo, 300) };
-    if (!nomeOk(r.elemento)) throw new Error('Elemento do XML inválido na regra.');
+    if (r.elemento !== undefined && r.elemento !== '' && !nomeOk(r.elemento)) throw new Error('Elemento do XML inválido na regra.');
     if (!nomeOk(r.atributo)) throw new Error('Atributo do XML inválido na regra.');
-    const o = { tipo, elemento: String(r.elemento), atributo: String(r.atributo) };
+    const o = { tipo, elemento: String(r.elemento || ''), atributo: String(r.atributo) };
     if (r.obrigatorio === true) o.obrigatorio = true;
     if (r.lista === true) o.lista = true;
     if (tipo === 'dominio' || tipo === 'digitos') {
@@ -76,7 +108,7 @@ function valNormalizarRegra_(regra) {
     return o;
   });
   const json = JSON.stringify(limpa.length === 1 ? limpa[0] : limpa);
-  if (json.length > 2000) throw new Error('Regra executável muito longa (máx. 2000 caracteres).');
+  if (json.length > 6000) throw new Error('Regra executável muito longa (máx. 6000 caracteres).');
   return json;
 }
 
@@ -215,68 +247,101 @@ function valObterPasta_() {
 function valNormalizarResumo_(r) {
   r = r || {};
   const num = v => Math.max(0, Math.floor(Number(v) || 0));
-  const regras = (Array.isArray(r.regras) ? r.regras : []).slice(0, VAL_CONFIG.MAX_REGRAS_RESUMO).map(x => ({
-    id: texto_(x.id, 30), idCampo: texto_(x.idCampo, 30), dado: texto_(x.dado, 200), atributo: texto_(x.atributo, 80),
-    descricao: texto_(x.descricao, 500), origemRegra: texto_(x.origemRegra, 30),
-    regra: texto_(x.regra, 300), executada: x.executada === true,
-    avaliados: num(x.avaliados), erros: num(x.erros),
+  const st = v => VAL_CONFIG.STATUS.indexOf(String(v)) > -1 ? String(v) : 'ERRO';
+  const verificacoes = (Array.isArray(r.verificacoes) ? r.verificacoes : []).slice(0, VAL_CONFIG.MAX_VERIFICACOES).map(x => ({
+    ids: (Array.isArray(x.ids) ? x.ids : []).slice(0, 20).map(i => texto_(i, 30)), nome: texto_(x.nome, 300), entidade: texto_(x.entidade, 60),
+    fonte: texto_(x.fonte, 30), campo: texto_(x.campo, 200), atributo: texto_(x.atributo, 80), tipo: texto_(x.tipo, 60),
+    prioridade: texto_(x.prioridade, 20), descricao: texto_(x.descricao, 600), nota: texto_(x.nota, 600), origem: texto_(x.origem, 30),
+    status: st(x.status), avaliados: num(x.avaliados), falhas: num(x.falhas),
     exemplos: (Array.isArray(x.exemplos) ? x.exemplos : []).slice(0, VAL_CONFIG.MAX_EXEMPLOS).map(e => ({
-      contexto: valMascarar_(texto_((e || {}).contexto, 300)), valor: valMascarar_(texto_((e || {}).valor, 120)), motivo: texto_((e || {}).motivo, 200)
+      chave: valMascarar_(texto_((e || {}).chave, 200)), encontrado: valMascarar_(texto_((e || {}).encontrado, 200)), esperado: valMascarar_(texto_((e || {}).esperado, 200))
     }))
   }));
+  const catalogo = (Array.isArray(r.catalogo) ? r.catalogo : []).slice(0, VAL_CONFIG.MAX_CATALOGO).map(x => ({
+    dq: texto_(x.dq, 30), idCampo: texto_(x.idCampo, 30), status: st(x.status), categoria: texto_(x.categoria, 60), motivo: texto_(x.motivo, 300),
+    tipo: texto_(x.tipo, 60), descricao: texto_(x.descricao, 600), prioridade: texto_(x.prioridade, 20)
+  }));
+  const cdes = (Array.isArray(r.cdes) ? r.cdes : []).slice(0, 500).map(c => ({ id: texto_(c.id, 30), dado: texto_(c.dado, 200), atributo: texto_(c.atributo, 80), bloco: texto_(c.bloco, 80) }));
   const estrutura = (Array.isArray(r.estrutura) ? r.estrutura : []).slice(0, 50).map(e => ({
     item: texto_((e || {}).item, 200), ok: (e || {}).ok === true, detalhe: valMascarar_(texto_((e || {}).detalhe, 300))
   }));
+  const perimetro = (Array.isArray(r.perimetro) ? r.perimetro : []).slice(0, 40).map(p => ({ rotulo: texto_(p.rotulo, 80), valor: texto_(p.valor, 60) }));
+  const k = r.kpis || {};
+  const kpis = {};
+  ['totOk', 'totAv', 'nDqCde', 'nExec', 'nCampos', 'ok', 'na', 'falha', 'alerta', 'ne'].forEach(c => { kpis[c] = num(k[c]); });
+  kpis.conformidade = kpis.totAv ? Math.round(kpis.totOk / kpis.totAv * 1000) / 10 : 0;
   const contagem = {};
-  Object.keys(r.contagem || {}).slice(0, 50).forEach(k => { if (/^[A-Za-z0-9_]{1,40}$/.test(k)) contagem[k] = num(r.contagem[k]); });
+  Object.keys(r.contagem || {}).slice(0, 50).forEach(c => { if (/^[A-Za-z0-9_]{1,40}$/.test(c)) contagem[c] = num(r.contagem[c]); });
   return {
-    codReporte: texto_(r.codReporte, 20), arquivo: texto_(r.arquivo, 200), tamanhoBytes: num(r.tamanhoBytes),
-    dtBase: texto_(r.dtBase, 20), totalRegistros: num(r.totalRegistros), duracaoSeg: num(r.duracaoSeg),
-    contagem, estrutura, regras
+    codReporte: texto_(r.codReporte, 20), nomeReporte: texto_(r.nomeReporte, 200), arquivo: texto_(r.arquivo, 200), remessa: texto_(r.remessa, 20),
+    tamanhoBytes: num(r.tamanhoBytes), dtBase: texto_(r.dtBase, 20), totalRegistros: num(r.totalRegistros), duracaoSeg: num(r.duracaoSeg),
+    contagem, estrutura, perimetro, kpis, cdes, catalogo, verificacoes
   };
 }
 
+/** PDF no mesmo formato do relatório da tela (e do relatório do script Python do 3040). */
 function valHtmlRelatorio_(v, meta) {
   const e = valEscHtml_;
-  const exec = v.regras.filter(x => x.executada);
-  const comErro = exec.filter(x => x.erros > 0);
-  const naoExec = v.regras.filter(x => !x.executada);
-  const estruturaOk = v.estrutura.every(x => x.ok);
-  const linhasErro = comErro.sort((a, b) => b.erros - a.erros).map(x => `
-    <tr><td><b>${e(x.id)}</b><br><small>${e(x.idCampo)}</small></td><td>${e(x.dado)}<br><code>${e(x.atributo)}</code></td>
-      <td>${e(x.descricao)}<br><small>Regra (${e(x.origemRegra)}): ${e(x.regra)}</small></td>
-      <td style="text-align:right"><b>${x.erros}</b> / ${x.avaliados}</td>
-      <td>${x.exemplos.map(ex => `<div class="ex">${e(ex.contexto)} → <code>${e(ex.valor || '(vazio)')}</code> ${e(ex.motivo)}</div>`).join('')}</td></tr>`).join('');
-  const linhasOk = exec.filter(x => !x.erros).map(x => `<tr><td>${e(x.id)}</td><td>${e(x.dado)} <code>${e(x.atributo)}</code></td><td>${e(x.descricao)}</td><td style="text-align:right">${x.avaliados}</td></tr>`).join('');
-  const linhasNao = naoExec.map(x => `<tr><td>${e(x.id)}</td><td>${e(x.dado)} <code>${e(x.atributo)}</code></td><td>${e(x.descricao)}</td><td>${e(x.regra)}</td></tr>`).join('');
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
-    body{font-family:Arial,Helvetica,sans-serif;font-size:10px;color:#0f172a;margin:24px}
-    h1{font-size:17px;margin:0 0 4px} h2{font-size:12.5px;margin:18px 0 6px;color:#1d4ed8;border-bottom:1px solid #cbd5e1;padding-bottom:3px}
-    .mut{color:#64748b} table{border-collapse:collapse;width:100%} th,td{border:1px solid #cbd5e1;padding:4px 5px;vertical-align:top;text-align:left}
-    th{background:#f1f5f9;font-size:9px;text-transform:uppercase} code{background:#eef2ff;padding:0 3px}
-    .kp td{font-size:11px} .ok{color:#15803d;font-weight:bold} .er{color:#b91c1c;font-weight:bold} .ex{margin-bottom:2px}
-  </style></head><body>
-    <h1>Validação de arquivo regulatório — ${e(v.codReporte)}</h1>
-    <div class="mut">Registro ${e(meta.id)} · ${e(meta.dataHora)} · por ${e(meta.usuario)}</div>
-    <h2>Resumo</h2>
-    <table class="kp">
-      <tr><td>Arquivo</td><td>${e(v.arquivo)} (${(v.tamanhoBytes / 1048576).toFixed(2)} MB)</td><td>Data-base</td><td>${e(v.dtBase || '-')}</td></tr>
-      <tr><td>Registros lidos</td><td>${v.totalRegistros}</td><td>Resultado</td><td class="${meta.status === 'Aprovado' ? 'ok' : 'er'}">${e(meta.status)}</td></tr>
-      <tr><td>Regras executadas</td><td>${exec.length}</td><td>Regras com erro</td><td>${comErro.length}</td></tr>
-      <tr><td>Ocorrências de erro</td><td>${meta.totalOcorrencias}</td><td>Regras não executáveis</td><td>${naoExec.length}</td></tr>
-      <tr><td>Elementos</td><td colspan="3">${Object.keys(v.contagem).map(k => e(k) + ': ' + v.contagem[k]).join(' · ')}</td></tr>
-    </table>
-    <h2>Estrutura do arquivo ${estruturaOk ? '<span class="ok">OK</span>' : '<span class="er">com problemas</span>'}</h2>
-    <table><tr><th>Verificação</th><th>Situação</th><th>Detalhe</th></tr>
-      ${v.estrutura.map(x => `<tr><td>${e(x.item)}</td><td class="${x.ok ? 'ok' : 'er'}">${x.ok ? 'OK' : 'Falhou'}</td><td>${e(x.detalhe)}</td></tr>`).join('')}</table>
-    <h2>Regras com erro (${comErro.length})</h2>
-    ${comErro.length ? `<table><tr><th>Check</th><th>Campo</th><th>Descrição / regra</th><th>Erros / avaliados</th><th>Exemplos (CPF/CNPJ mascarados)</th></tr>${linhasErro}</table>` : '<div class="ok">Nenhuma regra executada encontrou erro.</div>'}
-    <h2>Regras aprovadas (${exec.length - comErro.length})</h2>
-    ${linhasOk ? `<table><tr><th>Check</th><th>Campo</th><th>Descrição</th><th>Avaliados</th></tr>${linhasOk}</table>` : '<div class="mut">—</div>'}
-    <h2>Checks não executados automaticamente (${naoExec.length})</h2>
-    ${linhasNao ? `<table><tr><th>Check</th><th>Campo</th><th>Descrição</th><th>Motivo</th></tr>${linhasNao}</table>` : '<div class="mut">—</div>'}
-    <p class="mut" style="margin-top:18px">O arquivo foi lido apenas no navegador de quem validou; este relatório contém só o resumo e exemplos mascarados.</p>
-  </body></html>`;
+  const k = v.kpis;
+  const n = x => Number(x || 0).toLocaleString('pt-BR');
+  const cls = { 'OK': 'OK', 'FALHA': 'FALHA', 'ALERTA': 'ALERTA', 'N/A': 'NA', 'ERRO': 'ERRO', 'NÃO EXECUTADA': 'NE' };
+  const pill = s => '<span class="pill ' + (cls[s] || 'NE') + '">' + e(s) + '</span>';
+  const dims = {};
+  v.verificacoes.filter(x => ['OK', 'FALHA', 'ALERTA'].indexOf(x.status) > -1).forEach(x => {
+    const d = dims[x.tipo] = dims[x.tipo] || [0, 0];
+    d[0] += x.avaliados; d[1] += x.avaliados - x.falhas;
+  });
+  const linhasDim = Object.keys(dims).filter(d => dims[d][0]).map(d => '<tr><td>' + e(d) + '</td><td class="num">' + (dims[d][1] / dims[d][0] * 100).toFixed(1) + '%</td></tr>').join('');
+  const linhasCde = v.cdes.map(c => {
+    const q = v.catalogo.filter(x => x.idCampo === c.id);
+    const ex = q.filter(x => ['OK', 'FALHA', 'ALERTA', 'N/A'].indexOf(x.status) > -1).length;
+    const pior = q.some(x => x.status === 'FALHA') ? 'FALHA' : q.some(x => x.status === 'ALERTA') ? 'ALERTA' : ex ? 'OK' : 'NÃO EXECUTADA';
+    return '<tr><td>' + pill(pior) + '</td><td>' + e(c.id) + '</td><td><b>' + e(c.dado) + '</b><br><small>' + e(c.atributo) + '</small></td><td>' + e(c.bloco) +
+      '</td><td class="num">' + q.length + '</td><td class="num">' + ex + '</td><td>' + q.map(x => '<span class="chip ' + (cls[x.status] || 'NE') + '">' + e(x.dq) + '</span>').join(' ') + '</td></tr>';
+  }).join('');
+  const ordem = { 'ERRO': 0, 'FALHA': 1, 'ALERTA': 2, 'OK': 3, 'N/A': 4, 'NÃO EXECUTADA': 5 };
+  const linhas = v.verificacoes.slice().sort((a, b) => ordem[a.status] - ordem[b.status] || b.falhas - a.falhas).map(x => {
+    const pct = x.avaliados ? (x.avaliados - x.falhas) / x.avaliados * 100 : 0;
+    const ocorr = x.exemplos.length ? '<table class="inner"><tr><th>Chave</th><th>Encontrado</th><th>Esperado</th></tr>' +
+      x.exemplos.map(o => '<tr><td>' + e(o.chave) + '</td><td>' + e(o.encontrado) + '</td><td>' + e(o.esperado) + '</td></tr>').join('') + '</table>' +
+      (x.falhas > x.exemplos.length ? '<small>… e mais ' + n(x.falhas - x.exemplos.length) + ' registro(s).</small>' : '') : '';
+    return '<tr><td>' + pill(x.status) + '</td><td>' + x.ids.map(e).join(' ') + '</td><td><b>' + e(x.nome) + '</b>' +
+      (x.descricao ? '<br><small>Dicionário: ' + e(x.descricao) + '</small>' : '') + (x.nota ? '<br><small class="nota">' + e(x.nota) + '</small>' : '') + ocorr +
+      '</td><td>' + e(x.entidade) + '</td><td>' + e(x.campo || '—') + '<br><small>' + e(x.atributo) + '</small></td><td>' + e(x.tipo) + '</td><td>' + e(x.prioridade) +
+      '</td><td class="num">' + n(x.avaliados) + '</td><td class="num">' + n(x.falhas) + '</td><td class="num">' + pct.toFixed(1) + '%</td></tr>';
+  }).join('');
+  const ne = v.catalogo.filter(x => x.status === 'NÃO EXECUTADA').sort((a, b) => a.categoria.localeCompare(b.categoria) || a.dq.localeCompare(b.dq));
+  const linhasNe = ne.map(x => '<tr><td>' + e(x.categoria) + '</td><td>' + e(x.dq) + '</td><td>' + e(x.idCampo) + '</td><td>' + e(x.descricao || '(sem descrição)') + '</td><td>' + e(x.motivo) + '</td></tr>').join('');
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>' +
+    'body{font-family:Arial,Helvetica,sans-serif;font-size:9.5px;color:#1d2433;margin:20px}' +
+    '.hd{background:#004481;color:#fff;padding:12px 14px;margin-bottom:12px} .hd h1{font-size:15px;margin:0 0 3px} .hd div{font-size:10px}' +
+    'h2{font-size:12px;margin:16px 0 6px;color:#004481;border-bottom:1px solid #cbd5e1;padding-bottom:3px}' +
+    'table{border-collapse:collapse;width:100%} th,td{border:1px solid #d6dbe3;padding:3px 5px;vertical-align:top;text-align:left} th{background:#f1f4f8;font-size:8.5px;text-transform:uppercase}' +
+    '.num{text-align:right} small{color:#6b7385} .nota{color:#7a4f00} .kp td{font-size:10.5px} .kp b{font-size:14px}' +
+    '.pill,.chip{display:inline-block;padding:1px 6px;border-radius:8px;font-size:8.5px;font-weight:bold;color:#fff}' +
+    '.OK{background:#1f8a5b}.FALHA{background:#c23b3b}.ALERTA{background:#c27c0e}.NA{background:#8a93a6}.ERRO{background:#000}.NE{background:#fff;color:#5b6b8c;border:1px dashed #5b6b8c}' +
+    'table.inner{margin-top:4px} table.inner td,table.inner th{font-size:8.5px}' +
+    '</style></head><body>' +
+    '<div class="hd"><h1>Data Quality · ' + e(v.codReporte) + (v.nomeReporte ? ' — ' + e(v.nomeReporte) : '') + '</h1>' +
+    '<div>Data-base <b>' + e(v.dtBase || '-') + '</b> · XML: ' + e(v.arquivo) + (v.remessa ? ' (remessa ' + e(v.remessa) + ')' : '') +
+    ' · Registro ' + e(meta.id) + ' · ' + e(meta.dataHora) + ' · por ' + e(meta.usuario) + ' · Resultado: <b>' + e(meta.status) + '</b></div></div>' +
+    '<table class="kp"><tr>' +
+    '<td>Conformidade das verificações<br><b>' + k.conformidade.toFixed(1) + '%</b><br><small>' + n(k.totOk) + ' de ' + n(k.totAv) + ' registros avaliados</small></td>' +
+    '<td>Cobertura dos DQs de CDE<br><b>' + k.nExec + '/' + k.nDqCde + '</b><br><small>' + k.nCampos + ' campos CDE</small></td>' +
+    '<td>DQs CDE OK<br><b>' + k.ok + '</b><br><small>+ ' + k.na + ' N/A</small></td>' +
+    '<td>DQs CDE com falha<br><b>' + k.falha + '</b></td><td>DQs CDE em alerta<br><b>' + k.alerta + '</b></td>' +
+    '<td>DQs CDE não executados<br><b>' + k.ne + '</b></td></tr></table>' +
+    '<h2>Estrutura do arquivo</h2><table><tr><th>Verificação</th><th>Situação</th><th>Detalhe</th></tr>' +
+    v.estrutura.map(x => '<tr><td>' + e(x.item) + '</td><td>' + pill(x.ok ? 'OK' : 'FALHA') + '</td><td>' + e(x.detalhe) + '</td></tr>').join('') + '</table>' +
+    '<h2>Perímetro avaliado e conformidade por dimensão</h2><table><tr><td style="width:50%;border:none;padding:0 6px 0 0"><table>' +
+    v.perimetro.map(p => '<tr><td>' + e(p.rotulo) + '</td><td class="num">' + e(p.valor) + '</td></tr>').join('') +
+    '</table></td><td style="border:none;padding:0"><table><tr><th>Dimensão</th><th>% OK</th></tr>' + linhasDim + '</table></td></tr></table>' +
+    '<h2>Cobertura por campo CDE</h2><table><tr><th>Status</th><th>Campo</th><th>Dado</th><th>Bloco</th><th>DQs</th><th>Executados</th><th>Regras do Dicionário</th></tr>' + linhasCde + '</table>' +
+    '<h2>Resultado por verificação</h2><table><tr><th>Status</th><th>DQs</th><th>Critério</th><th>Entidade</th><th>Campo</th><th>Dimensão</th><th>Prioridade</th><th>Avaliados</th><th>Falhas</th><th>% OK</th></tr>' + linhas + '</table>' +
+    '<h2>DQs não executados e motivo</h2>' + (linhasNe ? '<table><tr><th>Categoria</th><th>DQ</th><th>Campo</th><th>Regra no Dicionário</th><th>Motivo</th></tr>' + linhasNe + '</table>' : '<small>Todos os DQs de CDE foram executados.</small>') +
+    '<p><small>O arquivo foi lido apenas no navegador de quem validou; este relatório contém só o resumo e até ' + VAL_CONFIG.MAX_EXEMPLOS +
+    ' ocorrências por verificação, com CPF/CNPJ mascarados. Status: FALHA = prioridade Alta com ocorrências; ALERTA = prioridade Média/Baixa com ocorrências; N/A = nenhum registro aplicável.</small></p>' +
+    '</body></html>';
 }
 
 /**
@@ -291,15 +356,15 @@ function apiDDRegistrarValidacao(resumo) {
   if (!v.arquivo) throw new Error('Informe o nome do arquivo validado.');
 
   const agora = new Date();
-  const exec = v.regras.filter(x => x.executada);
+  const comErro = v.verificacoes.filter(x => x.status === 'FALHA' || x.status === 'ALERTA' || x.status === 'ERRO');
   const meta = {
     id: 'VAL-' + Utilities.formatDate(agora, APP_CONFIG.TIMEZONE, 'yyyyMMdd-HHmmss') + '-' + Math.floor(100 + Math.random() * 900),
     dataHora: Utilities.formatDate(agora, APP_CONFIG.TIMEZONE, 'yyyy-MM-dd HH:mm:ss'),
     usuario: ctx.email,
-    totalOcorrencias: exec.reduce((s, x) => s + x.erros, 0)
+    totalOcorrencias: v.verificacoes.reduce((s, x) => s + x.falhas, 0)
   };
   const estruturaOk = v.estrutura.every(x => x.ok);
-  meta.status = estruturaOk && meta.totalOcorrencias === 0 ? 'Aprovado' : 'Com erros';
+  meta.status = estruturaOk && !comErro.length ? 'Aprovado' : 'Com erros';
 
   // PDF no Drive (pasta própria do módulo, criada no 1º uso e guardada nas Script Properties)
   const nomeBase = `${v.codReporte} - ${v.arquivo.replace(/\.[^.]+$/, '')} - ${meta.id}`.replace(/[\\/:*?"<>|]/g, '_');
@@ -309,8 +374,8 @@ function apiDDRegistrarValidacao(resumo) {
   const registro = {
     id: meta.id, dataHora: meta.dataHora, usuario: meta.usuario, codReporte: v.codReporte, arquivo: v.arquivo,
     tamanhoBytes: String(v.tamanhoBytes), dtBase: v.dtBase, totalRegistros: String(v.totalRegistros),
-    regrasExecutadas: String(exec.length), regrasComErro: String(exec.filter(x => x.erros > 0).length),
-    regrasNaoExecutadas: String(v.regras.length - exec.length), totalOcorrencias: String(meta.totalOcorrencias),
+    regrasExecutadas: String(v.kpis.nExec), regrasComErro: String(comErro.length),
+    regrasNaoExecutadas: String(v.kpis.ne), totalOcorrencias: String(meta.totalOcorrencias),
     status: meta.status, pdfUrl: arquivoPdf.getUrl(), pdfId: arquivoPdf.getId()
   };
 
