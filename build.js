@@ -25,6 +25,7 @@ const ORDEM_ARQUIVOS_GS = [
   'Controllers.gs',
   'Triggers.gs',
   'Dicionario.gs',
+  'ValidacaoArquivo.gs',
   'Main.gs'
 ];
 

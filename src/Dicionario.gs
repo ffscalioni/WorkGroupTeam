@@ -22,6 +22,9 @@ const DD_CONFIG = Object.freeze({
   PROP_VERSAO_CARGA: 'DD_VERSAO_CARGA',
   // Registros excluídos pela tela, por aba (DD_EXCLUIDOS_<aba>): uma nova revisão da carga inicial não os traz de volta
   PROP_EXCLUIDOS: 'DD_EXCLUIDOS_',
+  // Revisão dos cabeçalhos já aplicada numa planilha existente (ver ddGarantirColunas_)
+  PROP_VERSAO_COLUNAS: 'DD_VERSAO_COLUNAS',
+  VERSAO_COLUNAS: 2,
   // Versão própria do cache do Dicionário: gravar aqui não força recarga no Workgroup (e vice-versa)
   VERSION_KEY: 'HUB_V4_DD_VER',
   SHEETS: Object.freeze({
@@ -37,7 +40,8 @@ const DD_CONFIG = Object.freeze({
     DD_Regulatorios: ['cod', 'nome', 'regulador', 'escopo', 'area', 'periodicidade', 'prazo', 'estado', 'condicao', 'sistemaFonte', 'formaEnvio', 'manualidade', 'ownerDado', 'reportOwner', 'responsavelEnvio', 'areaReportOwner', 'tipoReport', 'baseNormativa', 'respLegal', 'diretor', 'nDados', 'nCde', 'dimensoes', 'auditoria', 'armAtual', 'armAlvo', 'link'],
     DD_Campos: ['id', 'codReporte', 'reporte', 'bloco', 'dado', 'atributo', 'origem', 'sistemaFonte', 'campoOrigem', 'regra', 'definicao', 'cde', 'area',
       'dataOwner', 'ownerConfirmado', 'slo', 'reportOwner', 'statusAda', 'campoAda', 'origemAda', 'observacoes', 'idElemento', 'outrosRegs', 'evidencia', 'status'],
-    DD_Quality_Checks: ['id', 'idCampo', 'codReporte', 'tipo', 'descricao', 'base', 'prioridade', 'origem'],
+    // regraExec: regra executável (JSON) usada pela aba "Validar arquivo" (ver ValidacaoArquivo.gs)
+    DD_Quality_Checks: ['id', 'idCampo', 'codReporte', 'tipo', 'descricao', 'base', 'prioridade', 'origem', 'regraExec'],
     DD_Lineage: ['id', 'idCampo', 'codReporte', 'camada', 'ordem', 'sistema', 'tabela', 'coluna', 'descricao', 'fonte']
   })
 });
@@ -173,8 +177,29 @@ function ddAplicarAtualizacao_(ss) {
   }
 }
 
+/**
+ * Planilha que já existia antes de uma coluna nova (ex.: regraExec em DD_Quality_Checks):
+ * acrescenta no fim do cabeçalho as colunas que faltam. ddGravar_ grava por posição, então
+ * sem isso o valor iria para uma coluna sem nome e se perderia na leitura. Roda uma vez por revisão.
+ */
+function ddGarantirColunas_(ss) {
+  const props = PropertiesService.getScriptProperties();
+  if (Number(props.getProperty(DD_CONFIG.PROP_VERSAO_COLUNAS) || 1) >= DD_CONFIG.VERSAO_COLUNAS) return;
+  Object.values(DD_CONFIG.SHEETS).forEach(nomeAba => {
+    const sheet = ss.getSheetByName(nomeAba);
+    if (!sheet || sheet.getLastColumn() === 0) return;
+    const cab = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+    const faltam = DD_CONFIG.HEADERS[nomeAba].filter(c => cab.indexOf(c) === -1);
+    if (!faltam.length) return;
+    sheet.getRange(1, cab.length + 1, 1, faltam.length).setValues([faltam])
+      .setFontWeight('bold').setBackground('#0f172a').setFontColor('#ffffff');
+  });
+  props.setProperty(DD_CONFIG.PROP_VERSAO_COLUNAS, String(DD_CONFIG.VERSAO_COLUNAS));
+}
+
 function ddInicializar_() {
   const ss = ddObterPlanilha_();
+  ddGarantirColunas_(ss);
   const s = DD_CONFIG.SHEETS;
   let seed = null, exc = null, carregou = false;
   [[s.REGS, 'regs'], [s.CAMPOS, 'campos'], [s.CHECKS, 'checks'], [s.LINEAGE, 'lineage']].forEach(par => {
@@ -239,7 +264,8 @@ function ddAquecerCache_() {
   Object.values(DD_CONFIG.SHEETS).forEach(nomeAba => {
     versao = CacheManager.salvarEntidadePaginada(nomeAba, ddLerAba_(ss, nomeAba), DD_CONFIG.VERSION_KEY);
   });
-  return versao;
+  // Histórico da aba "Validar arquivo" (DD_Validacoes, ver ValidacaoArquivo.gs)
+  return valAquecerCache_(ss) || versao;
 }
 
 /**
@@ -249,6 +275,7 @@ function ddAquecerCache_() {
 function aoEditarDicionarioManualmente(e) {
   if (!e || !e.range) return;
   const nomeAba = e.range.getSheet().getName();
+  if (nomeAba === VAL_CONFIG.SHEET) { valAquecerCache_(e.source); return; }
   if (Object.values(DD_CONFIG.SHEETS).indexOf(nomeAba) === -1) return;
   CacheManager.salvarEntidadePaginada(nomeAba, ddLerAba_(e.source, nomeAba), DD_CONFIG.VERSION_KEY);
 }

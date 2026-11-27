@@ -69,6 +69,17 @@
   .vazio{color:var(--muted);padding:24px;text-align:center}
   #toast{position:fixed;bottom:18px;right:18px;background:#0f172a;color:#fff;padding:10px 16px;border-radius:10px;font-size:12.5px;display:none;z-index:9}
   .hidden{display:none!important}
+  /* Aba "Validar arquivo" */
+  .barra{height:8px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin:4px 0}
+  .barra > div{height:100%;width:0;background:var(--primary);transition:width .2s}
+  .vsec{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin:12px 0;background:#fff}
+  .vsec > summary{cursor:pointer;font-weight:700;color:var(--primary)}
+  .vnota{font-size:11.5px;color:var(--muted);margin:6px 0}
+  .vex{font-size:11.5px;margin-top:3px;word-break:break-word}
+  .vex code{background:#fee2e2;color:#991b1b;padding:0 4px;border-radius:4px}
+  .vestr{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+  .cmut{color:var(--muted)}
+  textarea.json{font-family:Consolas,'Courier New',monospace;min-height:180px;font-size:12px}
 </style>
 </head>
 <body>
@@ -86,6 +97,7 @@
 <div class="tabs">
   <button class="tab on" data-aba="regs">🗂️ Inventário de Regulatórios</button>
   <button class="tab" data-aba="campos">🧬 Campos, Lineage & Data Quality</button>
+  <button class="tab" data-aba="validar">🧪 Validar arquivo</button>
 </div>
 
 <main>
@@ -121,10 +133,45 @@
       <tbody id="tbCampos"></tbody>
     </table></div>
   </div>
+
+  <!-- ABA 3: VALIDAR ARQUIVO (o XML é lido só neste navegador; ao servidor vai apenas o resumo) -->
+  <div class="box hidden" id="aba-validar">
+    <div class="filtros">
+      <div class="f" style="min-width:260px"><label>Reporte</label><select id="vRep"></select></div>
+      <div class="f" style="flex:1;min-width:260px"><label>Arquivo XML (lido em partes, só neste navegador)</label><input type="file" id="vArquivo" accept=".xml,.XML,text/xml"></div>
+      <button class="pri" id="btnValidar" disabled>▶ Validar arquivo</button>
+      <button class="sec hidden" id="btnCancelarVal">Cancelar</button>
+    </div>
+    <div id="vProgresso" class="hidden"><div class="barra"><div id="vBarra"></div></div><div class="vnota" id="vProgTxt"></div></div>
+    <div id="vResultado"></div>
+
+    <details class="vsec" id="vRegrasBox">
+      <summary>Regras executáveis do reporte (<span id="vNRegras">0</span>)</summary>
+      <div class="vnota">Ordem usada em cada data quality check: <b>regra salva na base</b> › <b>Gemini Nano do Chrome</b> › <b>automática pelo texto do check</b>.
+        Clique numa linha para ver ou editar a regra. <span id="vIAStatus"></span></div>
+      <div class="filtros">
+        <button class="sec" id="btnGerarIA" disabled>✨ Gerar regras com Gemini Nano</button>
+        <button class="sec" id="btnSalvarRegras">💾 Salvar regras geradas na base</button>
+        <div class="f" style="flex:1;min-width:200px"><label>Busca</label><input id="vRegraBusca" placeholder="Check, campo, atributo, descrição..."></div>
+        <div class="f"><label>Origem</label><select id="vRegraOrigem"><option value="">Todas</option><option>Base</option><option>Gemini Nano</option><option>Automática</option><option>Não executável</option></select></div>
+      </div>
+      <div class="tblwrap" style="max-height:420px"><table>
+        <thead><tr><th>Check</th><th>Campo</th><th>Elemento / atributo</th><th>Descrição</th><th>Regra</th><th>Origem</th></tr></thead>
+        <tbody id="tbRegras"></tbody>
+      </table></div>
+    </details>
+
+    <div class="sec-t">Validações registradas</div>
+    <div class="tblwrap" style="max-height:320px"><table>
+      <thead><tr><th>Data / hora</th><th>Reporte</th><th>Arquivo</th><th>Data-base</th><th>Registros</th><th>Regras c/ erro</th><th>Ocorrências</th><th>Resultado</th><th>Por</th><th>PDF</th></tr></thead>
+      <tbody id="tbValidacoes"></tbody>
+    </table></div>
+  </div>
 </main>
 <!-- Popups de edição e inclusão -->
 <div class="modal hidden" id="mdReg"><div class="modal-box"><div class="modal-top"><button type="button" data-fechar="mdReg" title="Fechar (Esc)">✕</button></div><div class="det" id="detReg"></div></div></div>
 <div class="modal hidden" id="mdCampo"><div class="modal-box"><div class="modal-top"><button type="button" data-fechar="mdCampo" title="Fechar (Esc)">✕</button></div><div class="det" id="detCampo"></div></div></div>
+<div class="modal hidden" id="mdRegra"><div class="modal-box"><div class="modal-top"><button type="button" data-fechar="mdRegra" title="Fechar (Esc)">✕</button></div><div class="det" id="detRegra"></div></div></div>
 <div id="toast"></div>
 
 <script>
@@ -197,13 +244,15 @@
     if (DD.urlApp) $('lnkPortal').href = DD.urlApp;
     if (DD.planilhaUrl) { $('lnkPlanilha').href = DD.planilhaUrl; $('lnkPlanilha').classList.remove('hidden'); }
     iniciarTela();
+    if (abaAtual === 'validar') carregarValidacoes(); // alguém pode ter registrado uma validação
   }
-  function chamar(nomeFn, arg, aoTerminar) {
+  /** @param {*} [arg2] segundo argumento, só para endpoints que recebem dois (ex.: apiDDSalvarRegraCheck) */
+  function chamar(nomeFn, arg, aoTerminar, arg2) {
     if (!TEM_SERVIDOR) { salvarDemo(); toast('Salvo (modo demonstração local)'); if (aoTerminar) aoTerminar(); return; }
     // A tela já mudou (atualização otimista); grava a cópia local e envia ao servidor em segundo plano
     salvarCacheLocal();
     OPERACOES_EM_BACKGROUND++;
-    google.script.run
+    const runner = google.script.run
       .withSuccessHandler(res => {
         OPERACOES_EM_BACKGROUND = Math.max(0, OPERACOES_EM_BACKGROUND - 1);
         if (res && res.versaoCache) { DD.versaoCache = String(res.versaoCache); salvarCacheLocal(); }
@@ -214,8 +263,8 @@
         OPERACOES_EM_BACKGROUND = Math.max(0, OPERACOES_EM_BACKGROUND - 1);
         alert('Não foi possível salvar: ' + err.message);
         sincronizarComServidor(); // desfaz a mudança local trazendo o estado real
-      })
-      [nomeFn](arg);
+      });
+    if (arg2 === undefined) runner[nomeFn](arg); else runner[nomeFn](arg, arg2);
   }
   function sincronizarComServidor() {
     google.script.run
@@ -265,7 +314,7 @@
     opcoes($('fCampoAda'), unicos(DD.campos.map(c => c.statusAda)), 'Todos');
     $('btnNovoReg').disabled = !DD.podeEditar;
     $('btnNovoCampo').disabled = !DD.podeEditar;
-    renderRegs(); renderCampos();
+    renderRegs(); renderCampos(); iniciarValidar();
   }
 
   /* ---------- ABA 1: regulatórios ---------- */
@@ -572,11 +621,615 @@
     abrirCampo(c.id); renderCampos();
   }
 
+  /* ---------- ABA 3: validar arquivo ----------
+     O XML é lido em partes (File.slice) só neste navegador; ao servidor vão apenas as regras
+     e o resumo do resultado, com CPF/CNPJ mascarados nos exemplos.
+     Regra executável de cada data quality check, nesta ordem:
+       1. regraExec salva na base (DD_Quality_Checks);
+       2. regra gerada pelo Gemini Nano do Chrome (guardada neste navegador até ser salva na base);
+       3. regra automática deduzida do texto do check. */
+  // Elemento do XML onde fica cada bloco do layout, por reporte. Bloco fora da lista: check não executável.
+  const VAL_ELEMENTOS = {
+    '3040': { 'Identificação': 'Doc3040', 'Cabeçalho': 'Doc3040', 'Cliente': 'Cli', 'Operação': 'Op', 'Vencimentos': 'Venc', 'Garantia': 'Gar', 'Res. 4966': 'ContInstFinRes4966' }
+  };
+  const VAL_RAIZ = { '3040': 'Doc3040' };
+  // Atributo usado para identificar cada elemento no contexto do exemplo de erro
+  const VAL_CHAVES_CONTEXTO = ['Cd', 'IPOC', 'Contrt', 'Ident', 'Tp'];
+  const VAL_TIPOS = ['obrigatorio', 'dominio', 'regex', 'data', 'numero', 'tamanho', 'digitos', 'unico', 'manual'];
+  const CHAVE_IA = 'DD_VAL_REGRAS_IA_V1', CHAVE_VALIDACOES = 'DD_HUB_V4_VALIDACOES';
+  const VAL = { arquivo: null, rodando: false, cancelar: false, resultado: null, validacoes: [], regrasIA: {}, iaStatus: '', regras: [] };
+  let abaAtual = 'regs';
+  try { VAL.regrasIA = JSON.parse(localStorage.getItem(CHAVE_IA) || '{}') || {}; } catch (e) {}
+
+  /** Mascara CPF (11), CNPJ (14), radical de CNPJ (8) e sequências longas de dígitos (ex.: dentro do IPOC). */
+  function mascarar(v) {
+    return String(v === undefined || v === null ? '' : v)
+      .replace(/\d{2,3}\.\d{3}\.\d{3}[\/-]\d{2,4}(-\d{2})?/g, m => m.slice(0, 3) + m.slice(3, -2).replace(/\d/g, '*') + m.slice(-2))
+      .replace(/\d+/g, m => (m.length === 8 || m.length === 11 || m.length === 14 || m.length >= 15) ? m.slice(0, 3) + '*'.repeat(m.length - 5) + m.slice(-2) : m);
+  }
+  function fmtMB(b) { return (Number(b) / 1048576).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' MB'; }
+  function fmtN(n) { return Number(n || 0).toLocaleString('pt-BR'); }
+  function bdgOrigem(o) {
+    const c = o === 'Base' ? 'b-ok' : o === 'Gemini Nano' ? 'b-cde' : o === 'Automática' ? 'b-info' : 'b-mut';
+    return `<span class="bdg ${c}">${esc(o)}</span>`;
+  }
+  function campoDoCheck(k) { return DD.campos.find(c => c.id === k.idCampo); }
+  /** Atributo do XML: o nome do campo no layout ("Indx / PercIndx" usa o primeiro). */
+  function atributoDoCampo(c) {
+    const a = String((c && c.atributo) || '').trim();
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(a)) return a;
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)\s*\//.exec(a);
+    return m ? m[1] : '';
+  }
+  function elementoDoCampo(cod, c) { return ((VAL_ELEMENTOS[cod] || {})[c && c.bloco]) || ''; }
+
+  /** Mesmas verificações de valNormalizarRegra_ no servidor. Devolve a lista de condições ou lança erro. */
+  function validarRegra(regra) {
+    const lista = Array.isArray(regra) ? regra : [regra];
+    const nome = v => /^[A-Za-z_][A-Za-z0-9_]{0,40}$/.test(String(v || ''));
+    if (!lista.length || lista.length > 10) throw new Error('A regra deve ter de 1 a 10 condições.');
+    lista.forEach(r => {
+      if (!r || typeof r !== 'object' || VAL_TIPOS.indexOf(r.tipo) === -1) throw new Error('Tipo de regra desconhecido: ' + (r && r.tipo));
+      if (r.tipo === 'manual') return;
+      if (!nome(r.elemento) || !nome(r.atributo)) throw new Error('Informe elemento e atributo do XML.');
+      if ((r.tipo === 'dominio' || r.tipo === 'digitos') && !(Array.isArray(r.valores) && r.valores.length)) throw new Error('Informe os valores da regra ' + r.tipo + '.');
+      if (r.tipo === 'digitos' && r.valores.some(v => !/^\d{1,3}$/.test(String(v)))) throw new Error('Quantidade de dígitos inválida.');
+      if (r.tipo === 'regex') new RegExp(r.padrao);
+      if (r.quando && !nome(String(r.quando.atributo || '').replace(/^[A-Za-z0-9_]+\./, ''))) throw new Error('Condição "quando" inválida.');
+    });
+    return lista;
+  }
+  function faixa(ini, fim) {
+    const a = parseInt(ini, 10), b = parseInt(fim, 10);
+    if (!(b >= a) || b - a > 300) return null;
+    const out = [];
+    for (let i = a; i <= b; i++) out.push(String(i).padStart(ini.length, '0'));
+    return out;
+  }
+  /** Regra deduzida do texto do check. Só gera o que o texto diz de forma explícita. */
+  function regraAutomatica(k, c, cod) {
+    if (!c) return { motivo: 'campo do check não encontrado' };
+    const el = elementoDoCampo(cod, c), at = atributoDoCampo(c);
+    if (!el) return { motivo: 'bloco "' + (c.bloco || '-') + '" sem elemento XML mapeado' };
+    if (!at) return { motivo: 'campo sem atributo único no layout (' + (c.atributo || 'vazio') + ')' };
+    const d = String(k.descricao || '');
+    const R = o => Object.assign({ elemento: el, atributo: at }, o);
+    const regras = [];
+    let m;
+    // "Obrigatório apenas para Tp=4"
+    if ((m = /obrigat[óo]ri[oa][^.;]*?\b([A-Za-z]\w*)\s*=\s*(\w+)/i.exec(d))) regras.push(R({ tipo: 'obrigatorio', quando: { atributo: m[1], valores: [m[2]] } }));
+    // "PF: CPF com 11 dígitos; PJ: CNPJ com 8 dígitos" (em qualquer ordem): PF é Tp=1 e PJ é Tp=2
+    const pf = /PF:[^;.]*?(\d+)\s*(?:primeiros\s+)?d[íi]gitos/i.exec(d), pj = /PJ:[^;.]*?(\d+)\s*(?:primeiros\s+)?d[íi]gitos/i.exec(d);
+    const qtdDigitos = d.match(/\d+\s*(?:algarismos|d[íi]gitos)/gi) || [];
+    if (pf && pj) {
+      regras.push(R({ tipo: 'digitos', valores: [pf[1]], quando: { atributo: 'Tp', valores: ['1'] } }));
+      regras.push(R({ tipo: 'digitos', valores: [pj[1]], quando: { atributo: 'Tp', valores: ['2'] } }));
+    } else if (!pf && !pj && qtdDigitos.length === 1 && (m = /(\d+)\s*(?:algarismos|d[íi]gitos)/i.exec(d)) && Number(m[1]) >= 3) {
+      // Uma única quantidade, de 3 dígitos ou mais ("ano (2 dígitos)" descreve parte do valor, não o valor todo)
+      regras.push(R({ tipo: 'digitos', valores: [m[1]] }));
+    }
+    if (/AAAA-MM-DD/.test(d)) regras.push(R({ tipo: 'data', formato: 'AAAA-MM-DD' }));
+    else if (/AAAA-MM(?!-)/.test(d)) regras.push(R({ tipo: 'data', formato: 'AAAA-MM' }));
+    if ((m = /dom[íi]nios?\s+(\d+)\s+a\s+(\d+)/i.exec(d)) && faixa(m[1], m[2])) regras.push(R({ tipo: 'dominio', valores: faixa(m[1], m[2]) }));
+    else if (/(^|[^A-Za-z])S ou N([^A-Za-z]|$)/.test(d)) regras.push(R({ tipo: 'dominio', valores: ['S', 'N'] }));
+    else if ((m = /[Dd]om[íi]nio\s+([A-Z0-9]{1,3})\s*(?:\([^)]*\))?\s*ou\s+([A-Z0-9]{1,3})(?![A-Za-z0-9])/.exec(d))) regras.push(R({ tipo: 'dominio', valores: [m[1], m[2]] }));
+    else {
+      // Lista de códigos com rótulo, começando em 01: "01 privado, 02 federal, 03 estadual/distrital, 04 municipal"
+      const cods = [], re = /(?:^|[\s,;—-])(\d{2})\s+[A-Za-zÀ-ú]/g;
+      let x;
+      while ((x = re.exec(d))) cods.push(x[1]);
+      if (cods.length >= 2 && cods[0] === '01') regras.push(R({ tipo: 'dominio', valores: Array.from(new Set(cods)) }));
+    }
+    if ((m = /at[ée]\s+(\d+)\s+caracteres/i.exec(d))) regras.push(R({ tipo: 'tamanho', max: Number(m[1]) }));
+    if ((m = /(\d+)\s+a\s+(\d+)\s+casas decimais/i.exec(d))) regras.push(R({ tipo: 'numero', decimaisMin: Number(m[1]), decimaisMax: Number(m[2]) }));
+    if (/sem repeti[çc][ãa]o|sem duplicidade|n[ãa]o pode repetir/i.test(d) && !/por cliente/i.test(d)) regras.push(R({ tipo: 'unico' }));
+    if (!regras.length) return { motivo: 'regra descrita só em texto (precisa de revisão ou de dados externos ao arquivo)' };
+    return { regra: regras.length === 1 ? regras[0] : regras };
+  }
+  /** Regras de todos os checks do reporte, já na ordem base › Gemini Nano › automática. */
+  function montarRegras(cod) {
+    return DD.checks.filter(k => k.codReporte === cod).map(k => {
+      const c = campoDoCheck(k);
+      const it = { k, c, elemento: elementoDoCampo(cod, c), atributo: atributoDoCampo(c), regra: null, origem: 'Não executável', motivo: '' };
+      if (String(k.regraExec || '').trim()) {
+        try {
+          const lista = validarRegra(JSON.parse(k.regraExec));
+          if (lista.every(x => x.tipo === 'manual')) { it.motivo = lista[0].motivo || 'marcado na base como não executável'; return it; }
+          it.regra = lista.filter(x => x.tipo !== 'manual'); it.origem = 'Base';
+          return it;
+        } catch (e) { it.motivo = 'regra da base inválida: ' + e.message; }
+      }
+      const ia = VAL.regrasIA[k.id];
+      if (ia && ia.descricao === k.descricao) {
+        try { it.regra = validarRegra(ia.regra).filter(x => x.tipo !== 'manual'); it.origem = 'Gemini Nano'; return it; } catch (e) {}
+      }
+      const auto = regraAutomatica(k, c, cod);
+      if (auto.regra) { it.regra = validarRegra(auto.regra); it.origem = 'Automática'; }
+      else it.motivo = it.motivo || auto.motivo;
+      return it;
+    });
+  }
+  function textoRegra(lista) {
+    if (!lista) return '';
+    return lista.map(r => {
+      const q = r.quando ? ` se ${r.quando.atributo}${r.quando.valores ? ' = ' + r.quando.valores.join(' ou ') : ' informado'}` : '';
+      const ob = r.obrigatorio ? ' (obrigatório)' : '';
+      const vals = v => v.length > 12 ? v.slice(0, 6).join(', ') + ' … ' + v[v.length - 1] : v.join(', ');
+      switch (r.tipo) {
+        case 'obrigatorio': return 'obrigatório' + q;
+        case 'dominio': return 'domínio ' + vals(r.valores) + (r.lista ? ' (lista com ;)' : '') + ob + q;
+        case 'regex': return 'padrão ' + r.padrao + ob + q;
+        case 'data': return 'data ' + (r.formato || 'AAAA-MM-DD') + ob + q;
+        case 'numero': return 'número' + (r.decimaisMin !== undefined || r.decimaisMax !== undefined ? ` com ${r.decimaisMin !== undefined ? r.decimaisMin : 0} a ${r.decimaisMax !== undefined ? r.decimaisMax : '∞'} casas decimais` : '') +
+          (r.min !== undefined ? ' ≥ ' + r.min : '') + (r.max !== undefined ? ' ≤ ' + r.max : '') + ob + q;
+        case 'tamanho': return 'tamanho' + (r.min !== undefined ? ' ≥ ' + r.min : '') + (r.max !== undefined ? ' ≤ ' + r.max : '') + ' caracteres' + ob + q;
+        case 'digitos': return r.valores.join(' ou ') + ' dígitos' + ob + q;
+        case 'unico': return 'único no arquivo' + q;
+        default: return r.tipo;
+      }
+    }).join(' · ');
+  }
+
+  function iniciarValidar() {
+    const sel = $('vRep'), atual = sel.value;
+    const cods = unicos(DD.checks.map(k => k.codReporte));
+    sel.innerHTML = cods.map(c => {
+      const r = DD.regs.find(x => x.cod === c);
+      return `<option value="${esc(c)}">${esc(c)} — ${esc(r ? r.nome : '')} (${DD.checks.filter(k => k.codReporte === c).length} checks)</option>`;
+    }).join('') || '<option value="">Nenhum reporte com data quality checks</option>';
+    sel.value = atual && cods.indexOf(atual) > -1 ? atual : (cods.indexOf('3040') > -1 ? '3040' : (cods[0] || ''));
+    renderRegras(); renderValidacoes();
+  }
+  function renderBotoesValidar() {
+    $('btnValidar').disabled = VAL.rodando || !VAL.arquivo || !$('vRep').value;
+    $('btnGerarIA').disabled = VAL.rodando || ['available', 'downloadable', 'downloading'].indexOf(VAL.iaStatus) === -1;
+    $('btnSalvarRegras').disabled = VAL.rodando || !DD.podeEditar || !VAL.regras.some(it => it.regra && it.origem !== 'Base');
+    $('btnCancelarVal').classList.toggle('hidden', !VAL.rodando);
+  }
+  function renderRegras() {
+    const cod = $('vRep').value;
+    VAL.regras = cod ? montarRegras(cod) : [];
+    const q = $('vRegraBusca').value.toLowerCase(), fo = $('vRegraOrigem').value;
+    const lista = VAL.regras.filter(it => (!fo || it.origem === fo) &&
+      (!q || [it.k.id, it.k.idCampo, it.c ? it.c.dado : '', it.atributo, it.k.descricao].join(' ').toLowerCase().includes(q)));
+    $('vNRegras').innerText = VAL.regras.filter(it => it.regra).length + ' executáveis de ' + VAL.regras.length;
+    $('tbRegras').innerHTML = lista.map(it => `<tr data-chk="${esc(it.k.id)}">
+      <td><b>${esc(it.k.id)}</b></td><td>${esc(it.c ? it.c.dado : it.k.idCampo)}</td>
+      <td>${it.elemento ? `<code>${esc(it.elemento)}/@${esc(it.atributo || '?')}</code>` : '-'}</td>
+      <td>${esc(it.k.descricao)}</td>
+      <td>${it.regra ? esc(textoRegra(it.regra)) : `<span class="cmut">${esc(it.motivo)}</span>`}</td>
+      <td>${bdgOrigem(it.origem)}</td></tr>`).join('')
+      || '<tr><td colspan="6" class="vazio">Nenhum data quality check para este filtro.</td></tr>';
+    renderBotoesValidar();
+  }
+  function abrirRegra(idCheck) {
+    const it = VAL.regras.find(x => x.k.id === idCheck);
+    if (!it) return;
+    let atual;
+    if (it.regra) atual = it.regra.length === 1 ? it.regra[0] : it.regra;
+    else { try { atual = JSON.parse(it.k.regraExec); } catch (e) { atual = { tipo: 'manual', motivo: it.motivo }; } }
+    const ro = DD.podeEditar ? '' : 'disabled';
+    const temBase = !!String(it.k.regraExec || '').trim();
+    $('detRegra').innerHTML = `
+      <h3>${esc(it.k.id)} — ${esc(it.c ? it.c.dado : it.k.idCampo)}</h3>
+      <div class="mut">Elemento <code>${esc(it.elemento || '-')}</code> · atributo <code>${esc(it.atributo || '-')}</code> · origem atual ${bdgOrigem(it.origem)}</div>
+      <div class="sec-t">Descrição do data quality check</div>
+      <div>${esc(it.k.descricao)}</div>
+      <div class="sec-t">Regra executável (JSON)</div>
+      <textarea id="rg_json" class="json" ${ro}>${esc(JSON.stringify(atual, null, 2))}</textarea>
+      <div class="vnota">Tipos: <code>obrigatorio</code>, <code>dominio</code> (valores), <code>regex</code> (padrao), <code>data</code> (formato AAAA-MM-DD ou AAAA-MM),
+        <code>numero</code> (decimaisMin, decimaisMax, min, max), <code>tamanho</code> (min, max), <code>digitos</code> (valores), <code>unico</code>, <code>manual</code> (motivo).
+        Opcionais: <code>obrigatorio: true</code>, <code>lista: true</code> (códigos separados por ;), <code>quando: {"atributo": "Tp" ou "Cli.Tp", "valores": [...]}</code>.
+        Uma lista <code>[...]</code> exige que todas as condições passem.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="pri" id="btnSalvarRegra" ${ro}>💾 Salvar na base</button>
+        ${temBase && DD.podeEditar ? '<button class="dan" id="btnLimparRegra" style="margin-left:auto">Remover regra da base</button>' : ''}
+      </div>`;
+    $('btnSalvarRegra').onclick = () => {
+      let r;
+      try { r = JSON.parse($('rg_json').value); validarRegra(r); } catch (e) { return alert('Regra inválida: ' + e.message); }
+      it.k.regraExec = JSON.stringify(r);
+      chamar('apiDDSalvarRegraCheck', it.k.id, null, it.k.regraExec);
+      fecharModal('mdRegra'); renderRegras(); toast('Regra salva na base.');
+    };
+    if ($('btnLimparRegra')) $('btnLimparRegra').onclick = () => {
+      if (!confirm('Remover a regra salva na base para ' + it.k.id + '?\n\nO check volta a usar a regra do Gemini Nano ou a automática.')) return;
+      it.k.regraExec = '';
+      chamar('apiDDSalvarRegraCheck', it.k.id, null, '');
+      fecharModal('mdRegra'); renderRegras(); toast('Regra removida da base.');
+    };
+    abrirModal('mdRegra');
+  }
+  function salvarRegrasGeradas() {
+    const itens = VAL.regras.filter(it => it.regra && it.origem !== 'Base');
+    if (!itens.length) return toast('Não há regras geradas para salvar.');
+    const nIA = itens.filter(it => it.origem === 'Gemini Nano').length;
+    if (!confirm(`Salvar na base ${itens.length} regra(s): ${nIA} do Gemini Nano e ${itens.length - nIA} automáticas?\n\n` +
+      'Depois de salvas, elas valem para todos os usuários e podem ser editadas clicando no check.')) return;
+    const lote = itens.map(it => ({ id: it.k.id, regraExec: JSON.stringify(it.regra.length === 1 ? it.regra[0] : it.regra) }));
+    lote.forEach((x, i) => { itens[i].k.regraExec = x.regraExec; });
+    chamar('apiDDSalvarRegrasEmLote', lote);
+    renderRegras();
+  }
+
+  /* Gemini Nano (Prompt API do Chrome). Sem a API, ou fora do Chrome, fica a regra automática. */
+  function apiIA() {
+    if (typeof LanguageModel !== 'undefined') return LanguageModel;
+    return (self.ai && self.ai.languageModel) || null;
+  }
+  async function verificarIA() {
+    const LM = apiIA();
+    let st = 'unavailable';
+    try {
+      if (LM && LM.availability) st = await LM.availability();
+      else if (LM && LM.capabilities) {
+        const c = await LM.capabilities();
+        st = c.available === 'readily' ? 'available' : c.available === 'after-download' ? 'downloadable' : 'unavailable';
+      }
+    } catch (e) { st = 'unavailable'; }
+    VAL.iaStatus = st;
+    $('vIAStatus').innerText = ({
+      available: 'Gemini Nano disponível neste Chrome.',
+      downloadable: 'Gemini Nano disponível: o Chrome baixa o modelo no primeiro uso.',
+      downloading: 'O Chrome está baixando o Gemini Nano…'
+    })[st] || 'Gemini Nano indisponível neste navegador: checks sem regra na base usam a regra automática.';
+    renderBotoesValidar();
+  }
+  const IA_SISTEMA = 'Você converte data quality checks de arquivos regulatórios XML do Banco Central em regras executáveis JSON.\n' +
+    'Responda SOMENTE com JSON: um objeto, ou uma lista de objetos que precisam passar todos. Campos:\n' +
+    'tipo: "obrigatorio" | "dominio" | "regex" | "data" | "numero" | "tamanho" | "digitos" | "unico" | "manual"\n' +
+    'valores: lista de textos (dominio: códigos aceitos, com zeros à esquerda como no texto; digitos: quantidades aceitas, ex.: ["11"])\n' +
+    'padrao: expressão regular sem barras (regex)\n' +
+    'formato: "AAAA-MM-DD" ou "AAAA-MM" (data)\n' +
+    'decimaisMin, decimaisMax, min, max: números (numero e tamanho)\n' +
+    'lista: true quando o atributo traz vários códigos separados por ponto e vírgula\n' +
+    'obrigatorio: true quando o atributo não pode faltar\n' +
+    'quando: {"atributo": "Tp", "valores": ["1"]} para aplicar só quando outro atributo do mesmo elemento ou de um elemento pai (ex.: "Cli.Tp") tiver esses valores\n' +
+    'Use {"tipo": "manual", "motivo": "..."} quando o check depender de dados de fora do arquivo (cadastros, tabelas de domínio não listadas, COSIF, PTAX, UNICAD) ' +
+    'ou não puder ser verificado só com o valor do atributo. Não invente códigos que não estejam no texto.';
+  function extrairJson(t) {
+    const s = String(t || '').replace(/`{3}(?:json)?/g, '');
+    const i = s.search(/[\[{]/), f = Math.max(s.lastIndexOf('}'), s.lastIndexOf(']'));
+    if (i < 0 || f < i) throw new Error('resposta sem JSON');
+    return JSON.parse(s.slice(i, f + 1));
+  }
+  async function gerarRegrasIA() {
+    const LM = apiIA();
+    if (!LM || VAL.rodando) return;
+    const alvos = VAL.regras.filter(it => it.origem !== 'Base' && it.elemento && it.atributo &&
+      !(VAL.regrasIA[it.k.id] && VAL.regrasIA[it.k.id].descricao === it.k.descricao));
+    if (!alvos.length) return toast('Os checks com atributo já têm regra da base ou do Gemini Nano.');
+    VAL.rodando = true; VAL.cancelar = false; mostrarProgresso(true);
+    let sessao = null, feitas = 0, ok = 0;
+    try {
+      progresso(0, 'Preparando o Gemini Nano…');
+      try {
+        sessao = await LM.create({
+          initialPrompts: [{ role: 'system', content: IA_SISTEMA }],
+          monitor(m) { m.addEventListener('downloadprogress', e => progresso(e.loaded, 'Baixando o Gemini Nano…')); }
+        });
+      } catch (e) { sessao = await LM.create({ systemPrompt: IA_SISTEMA }); }
+      for (const it of alvos) {
+        if (VAL.cancelar) break;
+        progresso(feitas / alvos.length, `Gemini Nano: ${it.k.id} (${feitas + 1} de ${alvos.length})`);
+        try {
+          const s = sessao.clone ? await sessao.clone() : sessao;
+          const resp = await s.prompt(`Elemento XML: ${it.elemento}\nAtributo: ${it.atributo}\nCampo: ${it.c ? it.c.dado : ''}\nCheck: ${it.k.descricao}`);
+          if (s !== sessao && s.destroy) s.destroy();
+          const r = extrairJson(resp);
+          // Elemento e atributo vêm do dicionário, não do modelo
+          const lista = (Array.isArray(r) ? r : [r]).map(x => x && x.tipo !== 'manual' ? Object.assign({}, x, { elemento: it.elemento, atributo: it.atributo }) : x);
+          validarRegra(lista);
+          if (lista.some(x => x.tipo !== 'manual')) {
+            VAL.regrasIA[it.k.id] = { descricao: it.k.descricao, regra: lista.length === 1 ? lista[0] : lista };
+            ok++;
+          }
+        } catch (e) { /* resposta inválida: o check continua com a regra automática */ }
+        feitas++;
+      }
+      try { localStorage.setItem(CHAVE_IA, JSON.stringify(VAL.regrasIA)); } catch (e) {}
+      toast(`Gemini Nano gerou ${ok} regra(s) em ${feitas} check(s).`);
+    } catch (e) {
+      alert('Não foi possível usar o Gemini Nano: ' + e.message);
+    } finally {
+      if (sessao && sessao.destroy) sessao.destroy();
+      VAL.rodando = false; mostrarProgresso(false); renderRegras(); verificarIA();
+    }
+  }
+
+  function mostrarProgresso(on) {
+    $('vProgresso').classList.toggle('hidden', !on);
+    if (on) progresso(0, '');
+    renderBotoesValidar();
+  }
+  function progresso(frac, txt) {
+    $('vBarra').style.width = Math.round(Math.min(1, Math.max(0, Number(frac) || 0)) * 100) + '%';
+    if (txt !== undefined) $('vProgTxt').innerText = txt;
+  }
+
+  /* Motor de validação */
+  function compilarRegras(itens) {
+    const porElemento = {};
+    itens.forEach(it => {
+      it.stats = { avaliados: 0, erros: 0, exemplos: [] };
+      (it.regra || []).forEach(r => {
+        const c = Object.assign({}, r);
+        if (r.tipo === 'regex') c.re = new RegExp('^(?:' + r.padrao + ')$');
+        if (r.tipo === 'dominio' || r.tipo === 'digitos') c.set = new Set(r.valores.map(String));
+        if (r.tipo === 'unico') c.vistos = new Set();
+        (porElemento[r.elemento] = porElemento[r.elemento] || []).push({ it, r: c });
+      });
+    });
+    return porElemento;
+  }
+  /** Valor de um atributo no próprio elemento ou num elemento pai ("Tp" ou "Cli.Tp"). */
+  function valorCondicao(no, ref) {
+    const p = ref.indexOf('.');
+    const nomeEl = p > -1 ? ref.slice(0, p) : '', at = p > -1 ? ref.slice(p + 1) : ref;
+    for (let n = no; n; n = n.pai) if ((!nomeEl || n.nome === nomeEl) && n.attrs[at] !== undefined) return n.attrs[at];
+    return undefined;
+  }
+  function dataValida(v, formato) {
+    const m = (formato === 'AAAA-MM' ? /^(\d{4})-(\d{2})$/ : /^(\d{4})-(\d{2})-(\d{2})$/).exec(v);
+    if (!m) return false;
+    const mes = Number(m[2]);
+    if (mes < 1 || mes > 12) return false;
+    if (!m[3]) return true;
+    const dia = Number(m[3]);
+    return dia >= 1 && dia <= new Date(Number(m[1]), mes, 0).getDate();
+  }
+  /** null = passou; texto = motivo do erro. */
+  function avaliar(r, v) {
+    switch (r.tipo) {
+      case 'obrigatorio': return null;
+      case 'dominio': {
+        const vals = r.lista ? v.split(';').map(s => s.trim()).filter(Boolean) : [v];
+        return vals.some(x => !r.set.has(x)) ? 'fora do domínio' : null;
+      }
+      case 'regex': return r.re.test(v) ? null : 'fora do padrão';
+      case 'data': return dataValida(v, r.formato) ? null : 'data inválida (' + (r.formato || 'AAAA-MM-DD') + ')';
+      case 'numero': {
+        if (!/^-?\d+(\.\d+)?$/.test(v)) return 'não é número';
+        const dec = (v.split('.')[1] || '').length, n = Number(v);
+        if (r.decimaisMin !== undefined && dec < r.decimaisMin) return `menos de ${r.decimaisMin} casas decimais`;
+        if (r.decimaisMax !== undefined && dec > r.decimaisMax) return `mais de ${r.decimaisMax} casas decimais`;
+        if (r.min !== undefined && n < r.min) return 'abaixo de ' + r.min;
+        if (r.max !== undefined && n > r.max) return 'acima de ' + r.max;
+        return null;
+      }
+      case 'tamanho':
+        if (r.min !== undefined && v.length < r.min) return 'menos de ' + r.min + ' caracteres';
+        if (r.max !== undefined && v.length > r.max) return 'mais de ' + r.max + ' caracteres';
+        return null;
+      case 'digitos': return /^\d+$/.test(v) && r.set.has(String(v.length)) ? null : `não tem ${r.valores.join(' ou ')} dígitos`;
+      case 'unico':
+        if (r.vistos.has(v)) return 'repetido no arquivo';
+        r.vistos.add(v);
+        return null;
+    }
+    return null;
+  }
+  function contextoNo(no) {
+    const partes = [];
+    for (let n = no; n && n.pai; n = n.pai) {
+      const ch = VAL_CHAVES_CONTEXTO.find(a => n.attrs[a] !== undefined);
+      partes.unshift(n.nome + (ch ? ` ${ch}=${n.attrs[ch]}` : ''));
+    }
+    return mascarar(partes.join(' › ') || no.nome);
+  }
+  /** Atributo do elemento; se o dicionário grafou com outra caixa (ex.: tpVlrGar × TpVlrGar), aceita também. */
+  function valorAtributo(no, nome) {
+    if (no.attrs[nome] !== undefined) return no.attrs[nome];
+    const alvo = nome.toLowerCase();
+    for (const k in no.attrs) if (k.toLowerCase() === alvo) return no.attrs[k];
+    return undefined;
+  }
+  function aplicarNo(no, porElemento) {
+    const lista = porElemento[no.nome];
+    if (!lista) return;
+    for (const { it, r } of lista) {
+      if (r.quando) {
+        const vq = valorCondicao(no, r.quando.atributo);
+        if (r.quando.valores ? r.quando.valores.indexOf(vq) === -1 : (vq === undefined || vq === '')) continue;
+      }
+      const v = valorAtributo(no, r.atributo);
+      let motivo;
+      if (v === undefined || v === '') {
+        if (r.tipo !== 'obrigatorio' && !r.obrigatorio) continue;
+        motivo = 'atributo ausente';
+      } else motivo = avaliar(r, v);
+      it.stats.avaliados++;
+      if (motivo) {
+        it.stats.erros++;
+        if (it.stats.exemplos.length < 5) it.stats.exemplos.push({ contexto: contextoNo(no), valor: mascarar(v === undefined ? '' : v), motivo });
+      }
+    }
+  }
+  function decodificar(v) {
+    if (v.indexOf('&') === -1) return v;
+    return v.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (m, e) => {
+      const l = e.toLowerCase();
+      if (l === 'amp') return '&'; if (l === 'lt') return '<'; if (l === 'gt') return '>'; if (l === 'quot') return '"'; if (l === 'apos') return "'";
+      const n = l.charAt(1) === 'x' ? parseInt(l.slice(2), 16) : parseInt(l.slice(1), 10);
+      try { return String.fromCodePoint(n); } catch (err) { return m; }
+    });
+  }
+  async function validarArquivo() {
+    const arq = VAL.arquivo, cod = $('vRep').value;
+    if (!arq || !cod || VAL.rodando) return;
+    const itens = montarRegras(cod);
+    let porElemento;
+    try { porElemento = compilarRegras(itens); } catch (e) { return alert('Regra inválida: ' + e.message); }
+    VAL.rodando = true; VAL.cancelar = false; VAL.resultado = null; renderResultado(); mostrarProgresso(true);
+    const inicio = Date.now(), contagem = {}, estrutura = [];
+    let raiz = null, atual = null, totalEl = 0, desbalanceadas = 0, erroEstrutura = '';
+    const reTag = /<([^>]*)>/g, reAttr = /([^\s=\/]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+    function tratarTag(t) {
+      const c0 = t.charAt(0);
+      if (c0 === '?' || c0 === '!') return; // declaração, comentário, DOCTYPE
+      if (c0 === '/') {
+        const nome = t.slice(1).trim();
+        if (atual && atual.nome === nome) { atual = atual.pai; return; }
+        desbalanceadas++;
+        if (!erroEstrutura) erroEstrutura = `fechamento de ${nome} sem a abertura correspondente`;
+        let n = atual;
+        while (n && n.nome !== nome) n = n.pai;
+        if (n) atual = n.pai;
+        return;
+      }
+      const auto = t.charAt(t.length - 1) === '/';
+      const corpo = auto ? t.slice(0, -1) : t;
+      const mNome = /^[^\s]+/.exec(corpo);
+      if (!mNome) return;
+      const no = { nome: mNome[0], attrs: {}, pai: atual };
+      reAttr.lastIndex = mNome[0].length;
+      let a;
+      while ((a = reAttr.exec(corpo))) no.attrs[a[1]] = decodificar(a[2] !== undefined ? a[2] : a[3]);
+      if (!raiz) raiz = no;
+      else if (!atual) { desbalanceadas++; if (!erroEstrutura) erroEstrutura = 'mais de um elemento raiz (' + no.nome + ')'; }
+      contagem[no.nome] = (contagem[no.nome] || 0) + 1;
+      totalEl++;
+      aplicarNo(no, porElemento);
+      if (!auto) atual = no;
+    }
+    try {
+      if (!arq.size) throw new Error('O arquivo está vazio.');
+      const cabec = await arq.slice(0, 512).text();
+      const mEnc = /encoding\s*=\s*["']([^"']+)["']/i.exec(cabec);
+      let dec;
+      try { dec = new TextDecoder(mEnc ? mEnc[1] : 'utf-8'); } catch (e) { dec = new TextDecoder('utf-8'); }
+      estrutura.push({ item: 'Codificação declarada', ok: !!mEnc, detalhe: mEnc ? mEnc[1] : 'sem declaração de encoding (lido como UTF-8)' });
+      const TAM = 4 * 1024 * 1024; // lê 4 MB por vez: arquivos grandes não travam o navegador
+      let resto = '';
+      for (let pos = 0; pos < arq.size; pos += TAM) {
+        if (VAL.cancelar) throw new Error('Validação cancelada.');
+        const fim = Math.min(pos + TAM, arq.size);
+        let txt = resto + dec.decode(await arq.slice(pos, fim).arrayBuffer(), { stream: fim < arq.size });
+        const ult = txt.lastIndexOf('>');
+        if (ult === -1) {
+          resto = txt;
+          if (resto.length > TAM * 2) throw new Error('O arquivo não parece ser um XML.');
+          continue;
+        }
+        resto = txt.slice(ult + 1);
+        txt = txt.slice(0, ult + 1);
+        reTag.lastIndex = 0;
+        let m;
+        while ((m = reTag.exec(txt))) tratarTag(m[1]);
+        progresso(fim / arq.size, `Lendo ${fmtMB(fim)} de ${fmtMB(arq.size)} · ${fmtN(totalEl)} elementos`);
+        await new Promise(r => setTimeout(r, 0)); // devolve a vez para a tela
+      }
+      const raizEsperada = VAL_RAIZ[cod];
+      estrutura.push({ item: 'Elemento raiz' + (raizEsperada ? ' ' + raizEsperada : ''), ok: !!raiz && (!raizEsperada || raiz.nome === raizEsperada),
+        detalhe: raiz ? 'encontrado: ' + raiz.nome : 'nenhum elemento XML encontrado' });
+      estrutura.push({ item: 'Abertura e fechamento das tags', ok: !desbalanceadas && !atual && !resto.trim(),
+        detalhe: desbalanceadas ? `${desbalanceadas} problema(s); o primeiro: ${erroEstrutura}` : atual ? `${atual.nome} aberto sem fechamento no fim do arquivo` : resto.trim() ? 'conteúdo depois da última tag' : 'ok' });
+      if (raiz && raiz.attrs.TotalCli !== undefined) {
+        estrutura.push({ item: 'TotalCli confere com a quantidade de Cli', ok: Number(raiz.attrs.TotalCli) === (contagem.Cli || 0),
+          detalhe: `TotalCli=${raiz.attrs.TotalCli} · Cli no arquivo: ${contagem.Cli || 0}` });
+      }
+      if (raizEsperada) estrutura.push({ item: 'Data-base informada', ok: !!(raiz && raiz.attrs.DtBase), detalhe: (raiz && raiz.attrs.DtBase) || 'DtBase ausente' });
+      VAL.resultado = {
+        codReporte: cod, arquivo: arq.name, tamanhoBytes: arq.size, dtBase: raiz ? (raiz.attrs.DtBase || '') : '',
+        totalRegistros: Math.max(0, totalEl - 1), duracaoSeg: Math.round((Date.now() - inicio) / 1000), contagem, estrutura,
+        regras: itens.map(it => ({
+          id: it.k.id, idCampo: it.k.idCampo, dado: it.c ? it.c.dado : '', atributo: it.elemento ? it.elemento + '/@' + (it.atributo || '?') : '',
+          descricao: it.k.descricao, origemRegra: it.origem, regra: it.regra ? textoRegra(it.regra) : it.motivo, executada: !!it.regra,
+          avaliados: it.stats.avaliados, erros: it.stats.erros, exemplos: it.stats.exemplos
+        }))
+      };
+    } catch (e) {
+      if (e.message === 'Validação cancelada.') toast(e.message); else alert('Não foi possível validar o arquivo: ' + e.message);
+    } finally {
+      VAL.rodando = false; mostrarProgresso(false); renderResultado(); renderRegras();
+    }
+  }
+  function renderResultado() {
+    const r = VAL.resultado;
+    if (!r) { $('vResultado').innerHTML = ''; return; }
+    const exec = r.regras.filter(x => x.executada), comErro = exec.filter(x => x.erros > 0).sort((a, b) => b.erros - a.erros);
+    const ocorr = exec.reduce((s, x) => s + x.erros, 0), aprovado = r.estrutura.every(x => x.ok) && !ocorr;
+    const semOcorrencia = exec.filter(x => !x.avaliados).length;
+    $('vResultado').innerHTML = `
+      <div class="kpis">
+        <div class="kpi"><b style="color:${aprovado ? 'var(--ok)' : 'var(--danger)'}">${aprovado ? 'Aprovado' : 'Com erros'}</b><span>Resultado</span></div>
+        <div class="kpi"><b>${fmtN(r.totalRegistros)}</b><span>Registros lidos</span></div>
+        <div class="kpi"><b>${exec.length}</b><span>Regras executadas</span></div>
+        <div class="kpi"><b style="color:var(--danger)">${comErro.length}</b><span>Regras com erro</span></div>
+        <div class="kpi"><b style="color:var(--danger)">${fmtN(ocorr)}</b><span>Ocorrências de erro</span></div>
+        <div class="kpi"><b class="cmut">${r.regras.length - exec.length}</b><span>Checks não executáveis</span></div>
+      </div>
+      <div class="vnota">${esc(r.arquivo)} · ${fmtMB(r.tamanhoBytes)} · data-base ${esc(r.dtBase || '-')} · lido em ${r.duracaoSeg}s ·
+        ${Object.keys(r.contagem).map(k => esc(k) + ': ' + fmtN(r.contagem[k])).join(' · ')}${semOcorrencia ? ` · ${semOcorrencia} regra(s) sem o atributo no arquivo` : ''}</div>
+      <div class="vestr">${r.estrutura.map(x => `<span class="bdg ${x.ok ? 'b-ok' : 'b-dan'}" title="${esc(x.detalhe)}">${x.ok ? '✓' : '✗'} ${esc(x.item)}${x.ok ? '' : ': ' + esc(x.detalhe)}</span>`).join('')}</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <button class="pri" id="btnRegistrarVal" ${TEM_SERVIDOR ? '' : 'disabled'}>📄 Registrar validação e gerar PDF</button>
+        <span class="vnota" id="vRegistroInfo">${TEM_SERVIDOR ? 'O PDF vai para a pasta "DD - Validações de Arquivos Regulatórios" no Drive e o registro para a aba DD_Validacoes.'
+          : 'Modo demonstração: o registro e o PDF só funcionam publicado no Apps Script.'}</span>
+      </div>
+      <div class="tblwrap" style="max-height:480px"><table>
+        <thead><tr><th>Check</th><th>Campo</th><th>Descrição / regra</th><th>Erros / avaliados</th><th>Exemplos (CPF/CNPJ mascarados)</th></tr></thead>
+        <tbody>${comErro.map(x => `<tr><td><b>${esc(x.id)}</b></td><td>${esc(x.dado)}<br><code>${esc(x.atributo)}</code></td>
+          <td>${esc(x.descricao)}<div class="vnota">${esc(x.origemRegra)}: ${esc(x.regra)}</div></td>
+          <td><b style="color:var(--danger)">${fmtN(x.erros)}</b> / ${fmtN(x.avaliados)}</td>
+          <td>${x.exemplos.map(e => `<div class="vex">${esc(e.contexto)} → <code>${esc(e.valor || '(vazio)')}</code> ${esc(e.motivo)}</div>`).join('')}</td></tr>`).join('')
+          || '<tr><td colspan="5" class="vazio">Nenhuma regra executada encontrou erro.</td></tr>'}</tbody>
+      </table></div>`;
+    $('btnRegistrarVal').onclick = registrarValidacao;
+  }
+  function registrarValidacao() {
+    if (!TEM_SERVIDOR || !VAL.resultado) return;
+    const btn = $('btnRegistrarVal');
+    btn.disabled = true; btn.innerText = 'Gerando o PDF…';
+    google.script.run
+      .withSuccessHandler(res => {
+        const reg = res.registro;
+        VAL.validacoes.unshift(reg); salvarValidacoesLocal(); renderValidacoes();
+        if (res.versaoCache) { DD.versaoCache = String(res.versaoCache); salvarCacheLocal(); }
+        btn.innerText = '✓ Validação registrada';
+        $('vRegistroInfo').innerHTML = `Registro ${esc(reg.id)}` + (/^https:\/\//.test(reg.pdfUrl || '') ? ` · <a target="_blank" rel="noopener" href="${esc(reg.pdfUrl)}">abrir o PDF</a>` : '');
+        toast('Validação registrada.');
+      })
+      .withFailureHandler(err => {
+        btn.disabled = false; btn.innerText = '📄 Registrar validação e gerar PDF';
+        alert('Não foi possível registrar a validação: ' + err.message);
+      })
+      .apiDDRegistrarValidacao(VAL.resultado);
+  }
+  function salvarValidacoesLocal() {
+    if (!TEM_SERVIDOR) return;
+    try { localStorage.setItem(CHAVE_VALIDACOES, JSON.stringify(VAL.validacoes)); } catch (e) {}
+  }
+  /** Histórico: mostra a cópia deste navegador na hora e depois a do servidor (RAM, com a planilha de reserva). */
+  function carregarValidacoes() {
+    if (!TEM_SERVIDOR) { renderValidacoes(); return; }
+    if (!VAL.validacoes.length) {
+      try { VAL.validacoes = JSON.parse(localStorage.getItem(CHAVE_VALIDACOES) || '[]') || []; } catch (e) {}
+      renderValidacoes();
+    }
+    google.script.run
+      .withSuccessHandler(res => { VAL.validacoes = (res && res.validacoes) || []; salvarValidacoesLocal(); renderValidacoes(); })
+      .withFailureHandler(err => { $('tbValidacoes').innerHTML = `<tr><td colspan="10" class="vazio">${esc(err.message)}</td></tr>`; })
+      .apiDDListarValidacoes();
+  }
+  function renderValidacoes() {
+    const cod = $('vRep').value;
+    const lista = VAL.validacoes.filter(v => !cod || v.codReporte === cod);
+    $('tbValidacoes').innerHTML = lista.map(v => `<tr>
+      <td>${esc(v.dataHora)}</td><td>${esc(v.codReporte)}</td><td>${esc(v.arquivo)}</td><td>${esc(v.dtBase || '-')}</td>
+      <td>${fmtN(v.totalRegistros)}</td><td>${esc(v.regrasComErro)}</td><td>${fmtN(v.totalOcorrencias)}</td>
+      <td><span class="bdg ${v.status === 'Aprovado' ? 'b-ok' : 'b-dan'}">${esc(v.status)}</span></td><td>${esc(v.usuario)}</td>
+      <td>${/^https:\/\//.test(v.pdfUrl || '') ? `<a target="_blank" rel="noopener" href="${esc(v.pdfUrl)}">📄 PDF</a>` : '-'}</td></tr>`).join('')
+      || `<tr><td colspan="10" class="vazio">${TEM_SERVIDOR ? 'Nenhuma validação registrada' + (cod ? ' para este reporte' : '') + '.'
+        : 'Modo demonstração: o histórico fica na planilha do Apps Script.'}</td></tr>`;
+  }
+
   /* ---------- popups ---------- */
   function abrirModal(id) { $(id).classList.remove('hidden'); }
   function fecharModal(id) {
     $(id).classList.add('hidden');
-    if (id === 'mdReg') { regSel = null; renderRegs(); } else { campoSel = null; renderCampos(); }
+    if (id === 'mdReg') { regSel = null; renderRegs(); }
+    else if (id === 'mdCampo') { campoSel = null; renderCampos(); }
   }
   document.querySelectorAll('.modal').forEach(m => m.addEventListener('click', ev => {
     if (ev.target === m || ev.target.getAttribute('data-fechar')) fecharModal(m.id);
@@ -587,9 +1240,12 @@
 
   /* ---------- navegação e eventos ---------- */
   function trocarAba(aba) {
+    abaAtual = aba;
     document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.getAttribute('data-aba') === aba));
     $('aba-regs').classList.toggle('hidden', aba !== 'regs');
     $('aba-campos').classList.toggle('hidden', aba !== 'campos');
+    $('aba-validar').classList.toggle('hidden', aba !== 'validar');
+    if (aba === 'validar') { renderRegras(); verificarIA(); carregarValidacoes(); }
   }
   document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => trocarAba(b.getAttribute('data-aba'))));
   ['fRegEstado', 'fRegRegulador', 'fRegArea'].forEach(id => $(id).addEventListener('change', renderRegs));
@@ -600,6 +1256,15 @@
   $('tbCampos').addEventListener('click', ev => { const tr = ev.target.closest('tr[data-id]'); if (tr) abrirCampo(tr.getAttribute('data-id')); });
   $('btnNovoReg').addEventListener('click', () => abrirReg('', true));
   $('btnNovoCampo').addEventListener('click', () => abrirCampo('', true));
+  $('vRep').addEventListener('change', () => { VAL.resultado = null; renderResultado(); renderRegras(); renderValidacoes(); });
+  $('vArquivo').addEventListener('change', ev => { VAL.arquivo = (ev.target.files && ev.target.files[0]) || null; VAL.resultado = null; renderResultado(); renderBotoesValidar(); });
+  $('btnValidar').addEventListener('click', validarArquivo);
+  $('btnCancelarVal').addEventListener('click', () => { VAL.cancelar = true; });
+  $('btnGerarIA').addEventListener('click', gerarRegrasIA);
+  $('btnSalvarRegras').addEventListener('click', salvarRegrasGeradas);
+  $('vRegraBusca').addEventListener('input', renderRegras);
+  $('vRegraOrigem').addEventListener('change', renderRegras);
+  $('tbRegras').addEventListener('click', ev => { const tr = ev.target.closest('tr[data-chk]'); if (tr) abrirRegra(tr.getAttribute('data-chk')); });
 
   carregar();
 </script>
